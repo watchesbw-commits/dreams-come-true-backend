@@ -1,10 +1,5 @@
 import express from 'express';
 import cors from 'cors';
-import { GoogleGenerativeAI } from '@google/generative-ai';
-import Stripe from 'stripe';
-import dotenv from 'dotenv';
-
-dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -12,41 +7,46 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
-
 const dreams = [];
 const users = {};
 
-app.get('/health', (req, res) => {
-  res.json({ status: 'Servidor Dreams Come True ✓', time: new Date().toISOString() });
+app.get('/', (req, res) => {
+  res.json({ status: 'Dreams Come True Backend funcionando' });
 });
 
-app.post('/api/dreams/generate', async (req, res) => {
-  try {
-    const { text, style, duration } = req.body;
-    if (!text || !style) {
-      return res.status(400).json({ error: 'Faltan parámetros: text y style' });
-    }
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', time: new Date().toISOString() });
+});
 
-    const stylePrompts = {
-      real: "Fotorrealista, cinematográfico, 4K",
-      anime: "Anime épico, Ghibli style, colores vibrantes, 4K",
-      cyber: "Cyberpunk, neón, futurista, luces eléctricas, 4K",
-      fantasy: "Fantasy épico, mágico, colores fantásticos, 4K",
-      ghibli: "Studio Ghibli, acuarela digital, naturaleza mágica, 4K",
-      acuarela: "Acuarela artística, colores suaves, hermoso, 4K",
-      pixel: "Pixel art retro, vibrante, 8-bit style, 4K",
-      terror: "Horror cinematográfico, atmósfera oscura, tensión, 4K",
-    };
+app.post('/api/dreams/generate', (req, res) => {
+  const { text, style, duration } = req.body;
+  if (!text || !style) {
+    return res.status(400).json({ error: 'Faltan parametros' });
+  }
+  const dream = {
+    id: Date.now(),
+    text,
+    style,
+    duration,
+    videoUrl: 'https://via.placeholder.com/720x1280',
+    createdAt: new Date(),
+    status: 'completed'
+  };
+  dreams.push(dream);
+  res.json({ success: true, dream });
+});
 
-    const fullPrompt = `${text}. Estilo: ${stylePrompts[style] || 'cinematográfico'}. Sin texto. Duración: ${duration}s`;
-    const dreamId = Date.now();
-    
-    const dream = {
-      id: dreamId,
-      text,
-      style,
-      duration,
-      prompt: fullPrompt,
-      videoUrl: `ht
+app.get('/api/dreams/community', (req, res) => {
+  res.json({ dreams: dreams.filter(d => d.isPublic), total: dreams.length });
+});
+
+app.post('/api/users', (req, res) => {
+  const { name, email } = req.body;
+  const userId = Date.now().toString();
+  users[userId] = { id: userId, name, email, plan: 'free', credits: 3 };
+  res.json({ success: true, user: users[userId] });
+});
+
+app.listen(PORT, () => {
+  console.log('Dreams Come True Backend en puerto ' + PORT);
+});
