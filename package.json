@@ -1,6 +1,7 @@
 {
   "name": "dreams-come-true-backend",
   "version": "1.0.0",
+  "type": "module",
   "description": "Backend API para Dreams Come True - App de videos de sueños con IA",
   "type": "module",
   "main": "server.js",
