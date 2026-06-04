@@ -12,6 +12,7 @@ const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 const dreams = [];
 const users = {};
+const operations = {}; // <-- NUEVO: aquí la cocina recuerda las ordenes completas
 
 const stylePrompts = {
   real: "photorealistic, cinematic, 4K",
@@ -47,6 +48,8 @@ app.post('/api/dreams/generate', async (req, res) => {
       config: { resolution: '720p' },
     });
 
+    operations[operation.name] = operation; // <-- NUEVO: guarda la orden completa
+
     res.json({
       success: true,
       operationName: operation.name,
@@ -65,9 +68,13 @@ app.post('/api/dreams/status', async (req, res) => {
       return res.status(400).json({ error: 'Falta operationName' });
     }
 
-    let operation = await ai.operations.getVideosOperation({
-      operation: { name: operationName },
-    });
+    let operation = operations[operationName]; // <-- NUEVO: recupera la orden completa
+    if (!operation) {
+      return res.status(404).json({ error: 'Operacion no encontrada (el servidor pudo reiniciarse)' });
+    }
+
+    operation = await ai.operations.getVideosOperation({ operation });
+    operations[operationName] = operation;
 
     if (!operation.done) {
       return res.json({ done: false, message: 'Generando...' });
