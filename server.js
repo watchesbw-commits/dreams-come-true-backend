@@ -1,6 +1,14 @@
 import express from 'express';
 import cors from 'cors';
 import { GoogleGenAI } from '@google/genai';
+import { Storage } from '@google-cloud/storage';
+
+const GCS_BUCKET = 'dreams-come-true-videos';
+
+// Inicializa GCS con las credenciales inyectadas como variable de entorno
+const gcsCredentials = JSON.parse(process.env.GCS_CREDENTIALS_JSON);
+const storage = new Storage({ credentials: gcsCredentials, projectId: 'river-pointer-383804' });
+const bucket = storage.bucket(GCS_BUCKET);
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -91,39 +99,41 @@ app.post('/api/dreams/status', async (req, res) => {
       return res.status(500).json({ error: 'Termino pero no se encontro el video' });
     }
 
-    videoUris[operationName] = video.uri;
-    console.log('[STATUS] Video listo:', video.uri);
+    console.log('[STATUS] Video listo, descargando para subir a GCS:', video.uri);
 
-    // Devolvemos un link a NUESTRO backend (la API key se queda protegida en el servidor)
-    const safeUrl = `${BACKEND_URL}/api/dreams/video?op=${encodeURIComponent(operationName)}`;
-    res.json({ done: true, videoUri: safeUrl });
+    // Descarga el video desde Google
+    const sep = video.uri.includes('?') ? '&' : '?';
+    const googleResp = await fetch(`${video.uri}${sep}key=${process.env.GEMINI_API_KEY}`);
+    if (!googleResp.ok) {
+      console.error('[STATUS] No se pudo descargar el video de Google:', googleResp.status);
+      return res.status(502).json({ error: 'No se pudo descargar el video de Google' });
+    }
+    const videoBuffer = Buffer.from(await googleResp.arrayBuffer());
+
+    // Sube a GCS con nombre único basado en timestamp
+    const fileName = `videos/${Date.now()}.mp4`;
+    const file = bucket.file(fileName);
+    await file.save(videoBuffer, { contentType: 'video/mp4' });
+
+    const publicUrl = `https://storage.googleapis.com/${GCS_BUCKET}/${fileName}`;
+    videoUris[operationName] = publicUrl;
+    console.log('[STATUS] Video subido a GCS:', publicUrl);
+
+    res.json({ done: true, videoUri: publicUrl });
   } catch (error) {
     console.error('[STATUS] Error:', error);
     res.status(500).json({ error: error.message });
   }
 });
 
-// Sirve el video descargandolo de Google con la API key (del lado del servidor)
-app.get('/api/dreams/video', async (req, res) => {
-  try {
-    const op = req.query.op;
-    const googleUri = videoUris[op];
-    if (!googleUri) {
-      return res.status(404).send('Video no encontrado');
-    }
-    const sep = googleUri.includes('?') ? '&' : '?';
-    const googleResp = await fetch(`${googleUri}${sep}key=${process.env.GEMINI_API_KEY}`);
-    if (!googleResp.ok) {
-      console.error('[VIDEO] Google respondio', googleResp.status);
-      return res.status(502).send('No se pudo descargar el video');
-    }
-    const arrayBuffer = await googleResp.arrayBuffer();
-    res.set('Content-Type', 'video/mp4');
-    res.send(Buffer.from(arrayBuffer));
-  } catch (error) {
-    console.error('[VIDEO] Error:', error);
-    res.status(500).send('Error sirviendo el video');
+// Redirige al video permanente en GCS (ya no necesita proxy ni API key)
+app.get('/api/dreams/video', (req, res) => {
+  const op = req.query.op;
+  const gcsUrl = videoUris[op];
+  if (!gcsUrl) {
+    return res.status(404).send('Video no encontrado');
   }
+  res.redirect(gcsUrl);
 });
 
 app.get('/api/dreams/community', (req, res) => {
