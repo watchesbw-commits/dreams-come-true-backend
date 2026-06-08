@@ -4,6 +4,8 @@ import { GoogleGenAI } from '@google/genai';
 import { Storage } from '@google-cloud/storage';
 import Stripe from 'stripe';
 import { createClient } from '@supabase/supabase-js';
+import { WebSocket } from 'ws';
+globalThis.WebSocket = WebSocket;
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
