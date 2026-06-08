@@ -2,10 +2,17 @@ import express from 'express';
 import cors from 'cors';
 import { GoogleGenAI } from '@google/genai';
 import { Storage } from '@google-cloud/storage';
+import Stripe from 'stripe';
+import { createClient } from '@supabase/supabase-js';
+
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_KEY
+);
 
 const GCS_BUCKET = 'dreams-come-true-videos';
 
-// Inicializa GCS con las credenciales inyectadas como variable de entorno
 const gcsCredentials = JSON.parse(process.env.GCS_CREDENTIALS_JSON);
 const storage = new Storage({ credentials: gcsCredentials, projectId: 'river-pointer-383804' });
 const bucket = storage.bucket(GCS_BUCKET);
@@ -15,14 +22,53 @@ const PORT = process.env.PORT || 3000;
 const BACKEND_URL = 'https://dreams-come-true-backend.onrender.com';
 
 app.use(cors());
+
+// Webhook debe ir ANTES de express.json()
+app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+  const sig = req.headers['stripe-signature'];
+  let event;
+  try {
+    event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
+  } catch (err) {
+    console.error('[WEBHOOK] Firma invalida:', err.message);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+
+  if (event.type === 'invoice.payment_succeeded') {
+    const invoice = event.data.object;
+    const subscription = await stripe.subscriptions.retrieve(invoice.subscription);
+    const userId = subscription.metadata.userId;
+    if (userId) {
+      await supabase.from('user_credits').upsert({
+        user_id: userId,
+        credits_remaining: 3,
+        subscription_status: 'active',
+        subscription_id: subscription.id,
+        current_period_end: new Date(subscription.current_period_end * 1000).toISOString(),
+      }, { onConflict: 'user_id' });
+    }
+  } else if (event.type === 'customer.subscription.deleted') {
+    const subscription = event.data.object;
+    const userId = subscription.metadata.userId;
+    if (userId) {
+      await supabase.from('user_credits')
+        .update({ subscription_status: 'cancelled' })
+        .eq('user_id', userId);
+    }
+  }
+
+  res.json({ received: true });
+});
+
 app.use(express.json());
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 const dreams = [];
 const users = {};
-const operations = {};   // recuerda las operaciones completas
-const videoUris = {};    // recuerda el link del video terminado
+const operations = {};
+const videoUris = {};
+const operationUsers = {};
 
 const stylePrompts = {
   real: "photorealistic, cinematic, 4K",
@@ -43,22 +89,75 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', time: new Date().toISOString() });
 });
 
+app.post('/create-subscription', async (req, res) => {
+  try {
+    const { userId, userEmail } = req.body;
+    const session = await stripe.checkout.sessions.create({
+      mode: 'subscription',
+      payment_method_types: ['card'],
+      customer_email: userEmail,
+      line_items: [{ price: process.env.STRIPE_PRICE_ID, quantity: 1 }],
+      success_url: `${process.env.FRONTEND_URL}?subscribed=true`,
+      cancel_url: `${process.env.FRONTEND_URL}?cancelled=true`,
+      subscription_data: { metadata: { userId } },
+    });
+    res.json({ url: session.url });
+  } catch (error) {
+    console.error('[CREATE-SUBSCRIPTION] Error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/credits/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { data } = await supabase
+      .from('user_credits')
+      .select('credits_remaining, subscription_status, current_period_end')
+      .eq('user_id', userId)
+      .single();
+    if (!data) {
+      return res.json({ credits: 0, subscriptionStatus: 'inactive' });
+    }
+    res.json({
+      credits: data.credits_remaining,
+      subscriptionStatus: data.subscription_status,
+      currentPeriodEnd: data.current_period_end,
+    });
+  } catch (error) {
+    console.error('[CREDITS] Error:', error);
+    res.json({ credits: 0, subscriptionStatus: 'inactive' });
+  }
+});
+
 app.post('/api/dreams/generate', async (req, res) => {
   try {
-    const { text, style } = req.body;
+    const { text, style, userId } = req.body;
     if (!text || !style) {
       return res.status(400).json({ error: 'Faltan parametros' });
+    }
+
+    if (userId) {
+      const { data: creditData } = await supabase
+        .from('user_credits')
+        .select('credits_remaining')
+        .eq('user_id', userId)
+        .single();
+      if (!creditData || creditData.credits_remaining <= 0) {
+        return res.status(402).json({ error: 'Sin créditos disponibles' });
+      }
     }
 
     const fullPrompt = `${text}. ${stylePrompts[style] || 'cinematic, 4K'}`;
 
     let operation = await ai.models.generateVideos({
-      model: 'veo-3.1-generate-preview',
+      model: 'veo-3.1-fast-generate-preview',
       prompt: fullPrompt,
       config: { resolution: '720p' },
     });
 
     operations[operation.name] = operation;
+    if (userId) operationUsers[operation.name] = userId;
     console.log('[GENERATE] Operacion creada:', operation.name, '| done:', operation.done);
 
     res.json({
@@ -101,7 +200,6 @@ app.post('/api/dreams/status', async (req, res) => {
 
     console.log('[STATUS] Video listo, descargando para subir a GCS:', video.uri);
 
-    // Descarga el video desde Google
     const sep = video.uri.includes('?') ? '&' : '?';
     const googleResp = await fetch(`${video.uri}${sep}key=${process.env.GEMINI_API_KEY}`);
     if (!googleResp.ok) {
@@ -110,7 +208,6 @@ app.post('/api/dreams/status', async (req, res) => {
     }
     const videoBuffer = Buffer.from(await googleResp.arrayBuffer());
 
-    // Sube a GCS con nombre único basado en timestamp
     const fileName = `videos/${Date.now()}.mp4`;
     const file = bucket.file(fileName);
     await file.save(videoBuffer, { contentType: 'video/mp4' });
@@ -118,6 +215,22 @@ app.post('/api/dreams/status', async (req, res) => {
     const publicUrl = `https://storage.googleapis.com/${GCS_BUCKET}/${fileName}`;
     videoUris[operationName] = publicUrl;
     console.log('[STATUS] Video subido a GCS:', publicUrl);
+
+    const userId = operationUsers[operationName];
+    if (userId) {
+      const { data: creditData } = await supabase
+        .from('user_credits')
+        .select('credits_remaining')
+        .eq('user_id', userId)
+        .single();
+      if (creditData && creditData.credits_remaining > 0) {
+        await supabase
+          .from('user_credits')
+          .update({ credits_remaining: creditData.credits_remaining - 1 })
+          .eq('user_id', userId);
+        console.log('[STATUS] Credito descontado para userId:', userId);
+      }
+    }
 
     res.json({ done: true, videoUri: publicUrl });
   } catch (error) {
