@@ -6,13 +6,21 @@ import Stripe from 'stripe';
 import { createClient } from '@supabase/supabase-js';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_KEY
-);
+
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
+if (!supabaseUrl || !supabaseKey) {
+  console.error('Faltan variables SUPABASE_URL o SUPABASE_SERVICE_KEY');
+  process.exit(1);
+}
+const supabase = createClient(supabaseUrl, supabaseKey);
 
 const GCS_BUCKET = 'dreams-come-true-videos';
 
+if (!process.env.GCS_CREDENTIALS_JSON) {
+  console.error('Falta variable GCS_CREDENTIALS_JSON');
+  process.exit(1);
+}
 const gcsCredentials = JSON.parse(process.env.GCS_CREDENTIALS_JSON);
 const storage = new Storage({ credentials: gcsCredentials, projectId: 'river-pointer-383804' });
 const bucket = storage.bucket(GCS_BUCKET);
