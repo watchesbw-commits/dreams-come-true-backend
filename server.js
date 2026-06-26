@@ -1,6 +1,5 @@
 import express from 'express';
 import cors from 'cors';
-import { GoogleGenAI } from '@google/genai';
 import { Storage } from '@google-cloud/storage';
 import Stripe from 'stripe';
 import { createClient } from '@supabase/supabase-js';
@@ -72,8 +71,6 @@ app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res)
 
 app.use(express.json());
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-
 const dreams = [];
 const users = {};
 const operations = {};
@@ -92,7 +89,7 @@ const stylePrompts = {
 };
 
 app.get('/', (req, res) => {
-  res.json({ status: 'Dreams Come True Backend funcionando' });
+  res.json({ status: 'Astra Backend funcionando' });
 });
 
 app.get('/health', (req, res) => {
@@ -160,23 +157,41 @@ app.post('/api/dreams/generate', async (req, res) => {
 
     const fullPrompt = `${text}. ${stylePrompts[style] || 'cinematic, 4K'}`;
 
-    let operation = await ai.models.generateVideos({
-      model: 'veo-3.1-fast-generate-preview',
-      prompt: fullPrompt,
-      config: { resolution: '720p' },
+    const higgsResp = await fetch('https://cloud.higgsfield.ai/api/v1/video/generate', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${process.env.HIGGSFIELD_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'seedance-1-0-lite-t2v-250528',
+        prompt: fullPrompt,
+        aspect_ratio: '9:16',
+        duration: 5,
+        resolution: '720p',
+      }),
     });
 
-    operations[operation.name] = operation;
-    if (userId) operationUsers[operation.name] = userId;
-    console.log('[GENERATE] Operacion creada:', operation.name, '| done:', operation.done);
+    if (!higgsResp.ok) {
+      const errText = await higgsResp.text();
+      console.error('[GENERATE] Error Higgsfield:', higgsResp.status, errText);
+      return res.status(500).json({ error: 'Error al iniciar generacion en Higgsfield' });
+    }
+
+    const higgsData = await higgsResp.json();
+    const jobId = higgsData.job_id;
+
+    operations[jobId] = jobId;
+    if (userId) operationUsers[jobId] = userId;
+    console.log('[GENERATE] Job Higgsfield creado:', jobId);
 
     res.json({
       success: true,
-      operationName: operation.name,
+      operationName: jobId,
       message: 'Generacion iniciada',
     });
   } catch (error) {
-    console.error('[GENERATE] Error Veo:', error);
+    console.error('[GENERATE] Error Higgsfield:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -188,35 +203,40 @@ app.post('/api/dreams/status', async (req, res) => {
       return res.status(400).json({ error: 'Falta operationName' });
     }
 
-    let operation = operations[operationName];
-    if (!operation) {
-      console.log('[STATUS] No encontrada en memoria:', operationName);
-      return res.status(404).json({ error: 'Operacion no encontrada (el servidor pudo reiniciarse)' });
+    const jobId = operationName;
+
+    const higgsResp = await fetch(`https://cloud.higgsfield.ai/api/v1/jobs/${jobId}`, {
+      headers: {
+        'Authorization': `Bearer ${process.env.HIGGSFIELD_API_KEY}`,
+      },
+    });
+
+    if (!higgsResp.ok) {
+      console.error('[STATUS] Error consultando Higgsfield:', higgsResp.status);
+      return res.status(502).json({ error: 'Error consultando estado del job' });
     }
 
-    operation = await ai.operations.getVideosOperation({ operation });
-    operations[operationName] = operation;
-    console.log('[STATUS]', operationName, '| done:', operation.done);
+    const higgsData = await higgsResp.json();
+    console.log('[STATUS]', jobId, '| status:', higgsData.status);
 
-    if (!operation.done) {
+    if (higgsData.status !== 'completed') {
       return res.json({ done: false, message: 'Generando...' });
     }
 
-    const video = operation.response?.generatedVideos?.[0]?.video;
-    if (!video?.uri) {
-      console.error('[STATUS] Termino pero no hay video. response:', JSON.stringify(operation.response));
-      return res.status(500).json({ error: 'Termino pero no se encontro el video' });
+    const videoUrl = higgsData.output?.video_url;
+    if (!videoUrl) {
+      console.error('[STATUS] Job completado pero no hay video_url:', JSON.stringify(higgsData));
+      return res.status(500).json({ error: 'Job completado pero no se encontro el video_url' });
     }
 
-    console.log('[STATUS] Video listo, descargando para subir a GCS:', video.uri);
+    console.log('[STATUS] Video listo, descargando de Higgsfield:', videoUrl);
 
-    const sep = video.uri.includes('?') ? '&' : '?';
-    const googleResp = await fetch(`${video.uri}${sep}key=${process.env.GEMINI_API_KEY}`);
-    if (!googleResp.ok) {
-      console.error('[STATUS] No se pudo descargar el video de Google:', googleResp.status);
-      return res.status(502).json({ error: 'No se pudo descargar el video de Google' });
+    const videoResp = await fetch(videoUrl);
+    if (!videoResp.ok) {
+      console.error('[STATUS] No se pudo descargar el video:', videoResp.status);
+      return res.status(502).json({ error: 'No se pudo descargar el video de Higgsfield' });
     }
-    const videoBuffer = Buffer.from(await googleResp.arrayBuffer());
+    const videoBuffer = Buffer.from(await videoResp.arrayBuffer());
 
     const fileName = `videos/${Date.now()}.mp4`;
     const file = bucket.file(fileName);
@@ -271,5 +291,5 @@ app.post('/api/users', (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log('Dreams Come True Backend en puerto ' + PORT);
+  console.log('Astra Backend en puerto ' + PORT);
 });

@@ -1,5 +1,5 @@
 {
-  "name": "dreams-backend",
+  "name": "astra-backend",
   "version": "1.0.0",
   "type": "module",
   "main": "server.js",
@@ -8,7 +8,6 @@
   },
   "dependencies": {
     "@google-cloud/storage": "^7.19.0",
-    "@google/genai": "^1.0.0",
     "@supabase/supabase-js": "^2.107.0",
     "cors": "^2.8.5",
     "express": "^4.18.2",
