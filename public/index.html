@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Astra — Tus sueños en video</title>
+  <script src="https://cdn.jsdelivr.net/npm/@clerk/clerk-js@latest/dist/clerk.browser.js" type="text/javascript"></script>
   <style>
     :root {
       --bg: #07071a;
@@ -26,12 +27,38 @@
         radial-gradient(ellipse 70% 50% at 15% 5%, rgba(124,58,237,0.2) 0%, transparent 65%),
         radial-gradient(ellipse 60% 50% at 85% 95%, rgba(59,130,246,0.12) 0%, transparent 65%);
     }
+
+    /* ── Sign-in gate ────────────────────────────────────────── */
+    #signInGate {
+      display: none;
+      min-height: 100vh;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 40px 20px;
+      text-align: center;
+    }
+    .signin-star { font-size: 40px; color: var(--purple-light); margin-bottom: 20px; }
+    .signin-title { font-size: 28px; font-weight: 700; letter-spacing: -0.5px; margin-bottom: 8px; }
+    .signin-sub { font-size: 15px; color: var(--muted); margin-bottom: 32px; line-height: 1.5; }
+    .btn-signin {
+      padding: 14px 32px;
+      background: linear-gradient(135deg, #7c3aed 0%, #5b21b6 100%);
+      border: none; border-radius: var(--radius); color: white;
+      font-size: 16px; font-weight: 600; font-family: inherit;
+      cursor: pointer; transition: all 0.22s; letter-spacing: -0.2px;
+    }
+    .btn-signin:hover { transform: translateY(-1px); box-shadow: 0 8px 28px rgba(124,58,237,0.45); }
+
+    /* ── App root ────────────────────────────────────────────── */
+    #appRoot { display: none; }
     .container { max-width: 460px; margin: 0 auto; padding: 24px 18px 80px; }
 
     /* ── Header ─────────────────────────────────────────────── */
     header { display: flex; align-items: center; justify-content: space-between; padding: 12px 0 30px; }
     .logo { font-size: 20px; font-weight: 700; letter-spacing: -0.3px; }
     .logo-star { color: var(--purple-light); margin-right: 6px; }
+    .header-right { display: flex; align-items: center; gap: 8px; }
     .credits-pill {
       display: flex; align-items: center; gap: 6px;
       background: var(--card); border: 1px solid var(--border);
@@ -41,6 +68,11 @@
     }
     .credits-pill:hover { border-color: rgba(124,58,237,0.4); }
     .credits-num { color: var(--purple-light); font-weight: 600; }
+    .btn-signout {
+      font-size: 12px; color: var(--muted); background: none; border: none;
+      cursor: pointer; font-family: inherit; transition: color 0.2s; padding: 4px;
+    }
+    .btn-signout:hover { color: var(--text); }
 
     /* ── Greeting ────────────────────────────────────────────── */
     .greeting { margin-bottom: 24px; }
@@ -81,8 +113,7 @@
     }
     .btn-upload-face:hover { background: rgba(124,58,237,0.3); }
 
-    /* toggle row (when photo exists) */
-    .face-has-photo { display: flex; align-items: center; gap: 14px; }
+    /* ── Toggle ──────────────────────────────────────────────── */
     .toggle-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
     .toggle-label-text { font-size: 14px; cursor: pointer; user-select: none; }
     .toggle {
@@ -107,6 +138,11 @@
       font-family: inherit; transition: color 0.2s;
     }
     .btn-change-photo:hover { color: var(--text); }
+    .upload-ok {
+      display: none; font-size: 11px; color: var(--green);
+      margin-top: 5px; align-items: center; gap: 4px;
+    }
+    .upload-ok.show { display: flex; }
 
     /* ── Textarea ─────────────────────────────────────────────── */
     textarea {
@@ -162,20 +198,14 @@
     @keyframes spin { to { transform: rotate(360deg); } }
     .status-txt { font-size: 13px; color: var(--muted); margin-bottom: 12px; }
     .steps { display: flex; gap: 5px; justify-content: center; }
-    .dot {
-      width: 6px; height: 6px; border-radius: 50%;
-      background: rgba(255,255,255,0.12); transition: background 0.3s;
-    }
+    .dot { width: 6px; height: 6px; border-radius: 50%; background: rgba(255,255,255,0.12); transition: background 0.3s; }
     .dot.on { background: var(--purple-light); }
 
     /* ── Video card ───────────────────────────────────────────── */
     .video-card { display: none; }
     .video-card.show { display: block; }
     video { width: 100%; border-radius: 12px; display: block; background: #000; }
-    .prompt-reveal {
-      display: none; margin-top: 12px; padding: 12px;
-      background: rgba(0,0,0,0.25); border-radius: 10px;
-    }
+    .prompt-reveal { display: none; margin-top: 12px; padding: 12px; background: rgba(0,0,0,0.25); border-radius: 10px; }
     .prompt-reveal.show { display: block; }
     .prompt-tag { font-size: 10px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: rgba(167,139,250,0.6); margin-bottom: 5px; }
     .prompt-body { font-size: 12px; color: rgba(232,232,244,0.65); line-height: 1.55; }
@@ -192,138 +222,141 @@
     }
     .btn-subscribe:hover { background: rgba(124,58,237,0.1); border-color: var(--purple); }
 
-    /* ── Upload success flash ─────────────────────────────────── */
-    .upload-ok {
-      display: none; font-size: 11px; color: var(--green);
-      margin-top: 5px; align-items: center; gap: 4px;
-    }
-    .upload-ok.show { display: flex; }
-
     #fileInput { display: none; }
   </style>
 </head>
 <body>
 <input type="file" id="fileInput" accept="image/*">
 
-<div class="container">
-  <!-- Header -->
-  <header>
-    <div class="logo"><span class="logo-star">✦</span>Astra</div>
-    <div class="credits-pill" onclick="checkCredits()">
-      <span>✦</span>
-      <span class="credits-num" id="creditsNum">—</span>
-      <span>sueños</span>
-    </div>
-  </header>
+<!-- ── Sign-in gate ─────────────────────────────────────────── -->
+<div id="signInGate">
+  <div class="signin-star">✦</div>
+  <h2 class="signin-title">Bienvenido a Astra</h2>
+  <p class="signin-sub">Inicia sesión para convertir<br>tus sueños en video</p>
+  <button class="btn-signin" id="btnSignIn">Iniciar sesión</button>
+</div>
 
-  <!-- Greeting -->
-  <div class="greeting">
-    <h1>¿Qué soñaste<br>esta noche?</h1>
-    <p>Cuéntame tu sueño y lo convertiré en video</p>
-  </div>
-
-  <!-- Face section -->
-  <div class="card">
-    <div class="card-label">¿Quieres aparecer en tu sueño?</div>
-
-    <!-- No photo -->
-    <div id="stateNoPhoto" class="face-row">
-      <div class="face-circle" onclick="triggerUpload()">
-        <svg class="face-cam" width="22" height="22" viewBox="0 0 24 24" fill="none"
-          stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/>
-          <circle cx="12" cy="13" r="4"/>
-        </svg>
-      </div>
-      <div class="face-body">
-        <div class="face-title">Sube tu foto</div>
-        <div class="face-sub">Aparecerás en tu sueño</div>
-      </div>
-      <button class="btn-upload-face" onclick="triggerUpload()">Subir</button>
-    </div>
-
-    <!-- Has photo -->
-    <div id="stateHasPhoto" class="face-row" style="display:none">
-      <div class="face-circle filled" id="faceCircle">
-        <img id="faceImg" src="" alt="Tu foto">
-      </div>
-      <div class="face-body">
-        <div class="toggle-row">
-          <label class="toggle" for="toggleCara">
-            <input type="checkbox" id="toggleCara" onchange="onToggle()">
-            <div class="toggle-track"></div>
-            <div class="toggle-thumb"></div>
-          </label>
-          <label class="toggle-label-text" for="toggleCara">Aparecer en mi sueño</label>
+<!-- ── App ──────────────────────────────────────────────────── -->
+<div id="appRoot">
+  <div class="container">
+    <header>
+      <div class="logo"><span class="logo-star">✦</span>Astra</div>
+      <div class="header-right">
+        <div class="credits-pill" onclick="checkCredits()">
+          <span>✦</span>
+          <span class="credits-num" id="creditsNum">—</span>
+          <span>sueños</span>
         </div>
-        <div style="display:flex; align-items:center; gap:10px;">
-          <button class="btn-change-photo" onclick="triggerUpload()">Cambiar foto</button>
-          <div class="upload-ok" id="uploadOk">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
-            Lista
+        <button class="btn-signout" id="btnSignOut" title="Cerrar sesión">↩</button>
+      </div>
+    </header>
+
+    <div class="greeting">
+      <h1>¿Qué soñaste<br>esta noche?</h1>
+      <p>Cuéntame tu sueño y lo convertiré en video</p>
+    </div>
+
+    <!-- Face section -->
+    <div class="card">
+      <div class="card-label">¿Quieres aparecer en tu sueño?</div>
+
+      <!-- No photo -->
+      <div id="stateNoPhoto" class="face-row">
+        <div class="face-circle" onclick="triggerUpload()">
+          <svg class="face-cam" width="22" height="22" viewBox="0 0 24 24" fill="none"
+            stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/>
+            <circle cx="12" cy="13" r="4"/>
+          </svg>
+        </div>
+        <div class="face-body">
+          <div class="face-title">Sube tu foto</div>
+          <div class="face-sub">Aparecerás en tu sueño</div>
+        </div>
+        <button class="btn-upload-face" onclick="triggerUpload()">Subir</button>
+      </div>
+
+      <!-- Has photo -->
+      <div id="stateHasPhoto" class="face-row" style="display:none">
+        <div class="face-circle filled">
+          <img id="faceImg" src="" alt="Tu foto">
+        </div>
+        <div class="face-body">
+          <div class="toggle-row">
+            <label class="toggle" for="toggleCara">
+              <input type="checkbox" id="toggleCara" onchange="onToggle()">
+              <div class="toggle-track"></div>
+              <div class="toggle-thumb"></div>
+            </label>
+            <label class="toggle-label-text" for="toggleCara">Aparecer en mi sueño</label>
+          </div>
+          <div style="display:flex; align-items:center; gap:10px;">
+            <button class="btn-change-photo" onclick="triggerUpload()">Cambiar foto</button>
+            <div class="upload-ok" id="uploadOk">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+              Lista
+            </div>
           </div>
         </div>
       </div>
     </div>
-  </div>
 
-  <!-- Dream input -->
-  <div class="card">
-    <div class="card-label">Describe tu sueño</div>
-    <textarea id="dreamText" placeholder="Estaba volando sobre una ciudad de nubes doradas cuando de repente aparecí en..." maxlength="500" oninput="updateCount()"></textarea>
-    <div class="char-count"><span id="charCount">0</span>/500</div>
-  </div>
-
-  <!-- Style selector -->
-  <div class="card">
-    <div class="card-label">Estilo visual</div>
-    <div class="styles-grid">
-      <button class="style-btn active" onclick="pickStyle('real',this)"><span class="style-emoji">🎬</span>Real</button>
-      <button class="style-btn" onclick="pickStyle('anime',this)"><span class="style-emoji">🌸</span>Anime</button>
-      <button class="style-btn" onclick="pickStyle('fantasy',this)"><span class="style-emoji">🧙</span>Fantasy</button>
-      <button class="style-btn" onclick="pickStyle('ghibli',this)"><span class="style-emoji">🌿</span>Ghibli</button>
-      <button class="style-btn" onclick="pickStyle('cyber',this)"><span class="style-emoji">⚡</span>Cyber</button>
-      <button class="style-btn" onclick="pickStyle('acuarela',this)"><span class="style-emoji">🎨</span>Acuarela</button>
-      <button class="style-btn" onclick="pickStyle('pixel',this)"><span class="style-emoji">👾</span>Pixel</button>
-      <button class="style-btn" onclick="pickStyle('terror',this)"><span class="style-emoji">👻</span>Terror</button>
+    <!-- Dream input -->
+    <div class="card">
+      <div class="card-label">Describe tu sueño</div>
+      <textarea id="dreamText" placeholder="Estaba volando sobre una ciudad de nubes doradas cuando de repente aparecí en..." maxlength="500" oninput="updateCount()"></textarea>
+      <div class="char-count"><span id="charCount">0</span>/500</div>
     </div>
-  </div>
 
-  <!-- Generate -->
-  <button class="btn-generate" id="btnGen" onclick="generate()">✦ Convertir en video</button>
-
-  <!-- Error -->
-  <div class="error-msg" id="errorMsg"></div>
-
-  <!-- Status -->
-  <div class="card status-card" id="statusCard">
-    <div class="spinner"></div>
-    <div class="status-txt" id="statusTxt">Preparando tu sueño…</div>
-    <div class="steps">
-      <div class="dot" id="d1"></div>
-      <div class="dot" id="d2"></div>
-      <div class="dot" id="d3"></div>
+    <!-- Style selector -->
+    <div class="card">
+      <div class="card-label">Estilo visual</div>
+      <div class="styles-grid">
+        <button class="style-btn active" onclick="pickStyle('real',this)"><span class="style-emoji">🎬</span>Real</button>
+        <button class="style-btn" onclick="pickStyle('anime',this)"><span class="style-emoji">🌸</span>Anime</button>
+        <button class="style-btn" onclick="pickStyle('fantasy',this)"><span class="style-emoji">🧙</span>Fantasy</button>
+        <button class="style-btn" onclick="pickStyle('ghibli',this)"><span class="style-emoji">🌿</span>Ghibli</button>
+        <button class="style-btn" onclick="pickStyle('cyber',this)"><span class="style-emoji">⚡</span>Cyber</button>
+        <button class="style-btn" onclick="pickStyle('acuarela',this)"><span class="style-emoji">🎨</span>Acuarela</button>
+        <button class="style-btn" onclick="pickStyle('pixel',this)"><span class="style-emoji">👾</span>Pixel</button>
+        <button class="style-btn" onclick="pickStyle('terror',this)"><span class="style-emoji">👻</span>Terror</button>
+      </div>
     </div>
-  </div>
 
-  <!-- Video -->
-  <div class="card video-card" id="videoCard">
-    <video id="videoEl" controls playsinline></video>
-    <div class="prompt-reveal" id="promptReveal">
-      <div class="prompt-tag">✦ Visión cinematográfica</div>
-      <div class="prompt-body" id="promptBody"></div>
+    <button class="btn-generate" id="btnGen" onclick="generate()">✦ Convertir en video</button>
+
+    <div class="error-msg" id="errorMsg"></div>
+
+    <div class="card status-card" id="statusCard">
+      <div class="spinner"></div>
+      <div class="status-txt" id="statusTxt">Preparando tu sueño…</div>
+      <div class="steps">
+        <div class="dot" id="d1"></div>
+        <div class="dot" id="d2"></div>
+        <div class="dot" id="d3"></div>
+      </div>
     </div>
-  </div>
 
-  <!-- Subscribe -->
-  <div class="subscribe-card" id="subCard">
-    <button class="btn-subscribe" onclick="subscribe()">✦ Obtener más sueños — $12.99/mes</button>
+    <div class="card video-card" id="videoCard">
+      <video id="videoEl" controls playsinline></video>
+      <div class="prompt-reveal" id="promptReveal">
+        <div class="prompt-tag">✦ Visión cinematográfica</div>
+        <div class="prompt-body" id="promptBody"></div>
+      </div>
+    </div>
+
+    <div class="subscribe-card" id="subCard">
+      <button class="btn-subscribe" onclick="subscribe()">✦ Obtener más sueños — $12.99/mes</button>
+    </div>
   </div>
 </div>
 
 <script>
+  const CLERK_KEY = 'pk_test_Y2xldmVyLXN0YXJmaXNoLTgzLmNsZXJrLmFjY291bnRzLmRldiQ';
+
   // ── State ──────────────────────────────────────────────────────────────────
-  let userId      = localStorage.getItem('userId');
+  let clerk       = null;
+  let userId      = null;   // always clerk.user.id
   let fotoBase64  = localStorage.getItem('fotoUsuario');
   let incluirCara = localStorage.getItem('incluirCara') === 'true';
   let elementId   = localStorage.getItem('elementId');
@@ -331,17 +364,30 @@
   let busy        = false;
   let poll        = null;
 
-  if (!userId) {
-    userId = 'u_' + Date.now() + '_' + Math.random().toString(36).slice(2,7);
-    localStorage.setItem('userId', userId);
-  }
+  // ── Clerk init ─────────────────────────────────────────────────────────────
+  (async () => {
+    clerk = new window.Clerk(CLERK_KEY);
+    await clerk.load();
 
-  // ── Boot ───────────────────────────────────────────────────────────────────
-  renderFace();
-  checkCredits();
+    clerk.addListener(({ user }) => {
+      if (user) {
+        userId = user.id;
+        document.getElementById('signInGate').style.display = 'none';
+        document.getElementById('appRoot').style.display = 'block';
+        renderFace();
+        checkCredits();
+        const p = new URLSearchParams(location.search);
+        if (p.get('subscribed') === 'true') { setTimeout(checkCredits, 2000); history.replaceState({}, '', '/'); }
+      } else {
+        userId = null;
+        document.getElementById('appRoot').style.display = 'none';
+        document.getElementById('signInGate').style.display = 'flex';
+      }
+    });
+  })();
 
-  const p = new URLSearchParams(location.search);
-  if (p.get('subscribed') === 'true') { setTimeout(checkCredits, 2000); history.replaceState({}, '', '/'); }
+  document.getElementById('btnSignIn').addEventListener('click', () => clerk.openSignIn());
+  document.getElementById('btnSignOut').addEventListener('click', () => clerk.signOut());
 
   // ── Face ───────────────────────────────────────────────────────────────────
   function renderFace() {
@@ -365,7 +411,6 @@
     const file = e.target.files[0];
     if (!file) return;
     e.target.value = '';
-
     const reader = new FileReader();
     reader.onload = async (ev) => {
       fotoBase64 = ev.target.result;
@@ -419,7 +464,7 @@
       const r = await fetch('/create-subscription', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId, userEmail: '' }),
+        body: JSON.stringify({ userId, userEmail: clerk.user?.primaryEmailAddress?.emailAddress || '' }),
       });
       const d = await r.json();
       if (d.url) location.href = d.url;
@@ -449,7 +494,6 @@
     showStatus('Enriqueciendo tu sueño con IA…', 0);
 
     try {
-      // Upload face if needed
       if (incluirCara && fotoBase64 && !elementId) {
         showStatus('Subiendo tu foto…', 0);
         await uploadFace();
@@ -509,11 +553,9 @@
 
   function showVideo(url) {
     document.getElementById('statusCard').classList.remove('show');
-    const vc = document.getElementById('videoCard');
-    const ve = document.getElementById('videoEl');
-    ve.src = url;
-    vc.classList.add('show');
-    ve.play().catch(() => {});
+    document.getElementById('videoEl').src = url;
+    document.getElementById('videoCard').classList.add('show');
+    document.getElementById('videoEl').play().catch(() => {});
     resetUI();
   }
 
@@ -523,26 +565,14 @@
     b.disabled = on;
     b.textContent = on ? '✦ Generando…' : '✦ Convertir en video';
   }
-
   function showStatus(msg, step) {
     document.getElementById('statusCard').classList.add('show');
     document.getElementById('statusTxt').textContent = msg;
     [1,2,3].forEach(i => document.getElementById('d'+i).classList.toggle('on', i <= step + 1));
   }
-
-  function showErr(msg) {
-    const el = document.getElementById('errorMsg');
-    el.textContent = msg;
-    el.classList.add('show');
-  }
-
+  function showErr(msg) { const el = document.getElementById('errorMsg'); el.textContent = msg; el.classList.add('show'); }
   function hideErr() { document.getElementById('errorMsg').classList.remove('show'); }
-
-  function resetUI() {
-    busy = false;
-    setBtn(false);
-    document.getElementById('statusCard').classList.remove('show');
-  }
+  function resetUI() { busy = false; setBtn(false); document.getElementById('statusCard').classList.remove('show'); }
 </script>
 </body>
 </html>
