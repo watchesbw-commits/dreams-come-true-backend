@@ -70,6 +70,7 @@ app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res)
 });
 
 app.use(express.json());
+app.use(express.static('public'));
 
 const dreams = [];
 const users = {};
@@ -112,10 +113,6 @@ async function enrichPromptWithClaude(originalPrompt) {
     return null;
   }
 }
-
-app.get('/', (req, res) => {
-  res.json({ status: 'Astra Backend funcionando' });
-});
 
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', time: new Date().toISOString() });
@@ -162,9 +159,29 @@ app.get('/credits/:userId', async (req, res) => {
   }
 });
 
+app.post('/api/user/upload-face', async (req, res) => {
+  try {
+    const { userId, imageBase64 } = req.body;
+    if (!userId || !imageBase64) {
+      return res.status(400).json({ error: 'Faltan parámetros' });
+    }
+    const base64Data = imageBase64.replace(/^data:image\/\w+;base64,/, '');
+    const imageBuffer = Buffer.from(base64Data, 'base64');
+    const fileName = `faces/${userId}.jpg`;
+    const file = bucket.file(fileName);
+    await file.save(imageBuffer, { contentType: 'image/jpeg' });
+    const publicUrl = `https://storage.googleapis.com/${GCS_BUCKET}/${fileName}`;
+    console.log('[UPLOAD-FACE] Cara subida para userId:', userId);
+    res.json({ elementId: publicUrl });
+  } catch (error) {
+    console.error('[UPLOAD-FACE] Error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.post('/api/dreams/generate', async (req, res) => {
   try {
-    const { text, style, userId } = req.body;
+    const { text, style, userId, incluirCara, elementId } = req.body;
     if (!text || !style) {
       return res.status(400).json({ error: 'Faltan parametros' });
     }
@@ -185,19 +202,26 @@ app.post('/api/dreams/generate', async (req, res) => {
     console.log('[ENRICH] Prompt enriquecido:', enrichedText ? 'OK' : 'fallback a original');
     const fullPrompt = `${promptToUse}. ${stylePrompts[style] || 'cinematic, 4K'}`;
 
+    const higgsBody = {
+      model: 'seedance-1-0-lite-t2v-250528',
+      prompt: fullPrompt,
+      aspect_ratio: '9:16',
+      duration: 5,
+      resolution: '720p',
+    };
+
+    if (incluirCara && elementId) {
+      higgsBody.reference_image_url = elementId;
+      console.log('[GENERATE] Cara de referencia incluida:', elementId);
+    }
+
     const higgsResp = await fetch('https://cloud.higgsfield.ai/api/v1/video/generate', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${process.env.HIGGSFIELD_API_KEY}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        model: 'seedance-1-0-lite-t2v-250528',
-        prompt: fullPrompt,
-        aspect_ratio: '9:16',
-        duration: 5,
-        resolution: '720p',
-      }),
+      body: JSON.stringify(higgsBody),
     });
 
     if (!higgsResp.ok) {

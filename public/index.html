@@ -1,0 +1,548 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Astra — Tus sueños en video</title>
+  <style>
+    :root {
+      --bg: #07071a;
+      --card: rgba(255,255,255,0.04);
+      --border: rgba(255,255,255,0.08);
+      --purple: #7c3aed;
+      --purple-light: #a78bfa;
+      --text: #e8e8f4;
+      --muted: rgba(232,232,244,0.45);
+      --radius: 16px;
+      --green: #34d399;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      background-image:
+        radial-gradient(ellipse 70% 50% at 15% 5%, rgba(124,58,237,0.2) 0%, transparent 65%),
+        radial-gradient(ellipse 60% 50% at 85% 95%, rgba(59,130,246,0.12) 0%, transparent 65%);
+    }
+    .container { max-width: 460px; margin: 0 auto; padding: 24px 18px 80px; }
+
+    /* ── Header ─────────────────────────────────────────────── */
+    header { display: flex; align-items: center; justify-content: space-between; padding: 12px 0 30px; }
+    .logo { font-size: 20px; font-weight: 700; letter-spacing: -0.3px; }
+    .logo-star { color: var(--purple-light); margin-right: 6px; }
+    .credits-pill {
+      display: flex; align-items: center; gap: 6px;
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 20px; padding: 5px 12px; font-size: 13px;
+      color: var(--muted); cursor: pointer; transition: border-color 0.2s;
+      user-select: none;
+    }
+    .credits-pill:hover { border-color: rgba(124,58,237,0.4); }
+    .credits-num { color: var(--purple-light); font-weight: 600; }
+
+    /* ── Greeting ────────────────────────────────────────────── */
+    .greeting { margin-bottom: 24px; }
+    .greeting h1 { font-size: 26px; font-weight: 700; letter-spacing: -0.5px; line-height: 1.25; margin-bottom: 6px; }
+    .greeting p { font-size: 14px; color: var(--muted); }
+
+    /* ── Card ────────────────────────────────────────────────── */
+    .card {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 18px; margin-bottom: 12px;
+    }
+    .card-label {
+      font-size: 11px; font-weight: 600; letter-spacing: 0.07em;
+      text-transform: uppercase; color: var(--muted); margin-bottom: 14px;
+    }
+
+    /* ── Face section ────────────────────────────────────────── */
+    .face-row { display: flex; align-items: center; gap: 14px; }
+    .face-circle {
+      width: 62px; height: 62px; border-radius: 50%; flex-shrink: 0;
+      background: rgba(124,58,237,0.12);
+      border: 2px dashed rgba(124,58,237,0.35);
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer; transition: all 0.2s; overflow: hidden;
+    }
+    .face-circle:hover { border-color: var(--purple-light); background: rgba(124,58,237,0.22); }
+    .face-circle.filled { border: 2px solid var(--purple); cursor: default; }
+    .face-circle img { width: 100%; height: 100%; object-fit: cover; }
+    .face-cam { color: var(--purple-light); opacity: 0.8; }
+    .face-body { flex: 1; }
+    .face-title { font-size: 14px; font-weight: 500; margin-bottom: 3px; }
+    .face-sub { font-size: 12px; color: var(--muted); }
+    .btn-upload-face {
+      font-size: 12px; font-weight: 500; font-family: inherit;
+      background: rgba(124,58,237,0.18); border: 1px solid rgba(124,58,237,0.4);
+      border-radius: 8px; color: var(--purple-light); padding: 6px 12px;
+      cursor: pointer; transition: all 0.2s; white-space: nowrap;
+    }
+    .btn-upload-face:hover { background: rgba(124,58,237,0.3); }
+
+    /* toggle row (when photo exists) */
+    .face-has-photo { display: flex; align-items: center; gap: 14px; }
+    .toggle-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+    .toggle-label-text { font-size: 14px; cursor: pointer; user-select: none; }
+    .toggle {
+      position: relative; width: 42px; height: 23px; flex-shrink: 0;
+      cursor: pointer; display: inline-block;
+    }
+    .toggle input { opacity: 0; width: 0; height: 0; position: absolute; }
+    .toggle-track {
+      position: absolute; inset: 0; border-radius: 12px;
+      background: rgba(255,255,255,0.1); transition: background 0.22s;
+    }
+    .toggle input:checked + .toggle-track { background: var(--purple); }
+    .toggle-thumb {
+      position: absolute; width: 17px; height: 17px; border-radius: 50%;
+      background: white; top: 3px; left: 3px;
+      transition: transform 0.22s; pointer-events: none;
+    }
+    .toggle input:checked ~ .toggle-thumb { transform: translateX(19px); }
+    .btn-change-photo {
+      font-size: 12px; color: var(--muted); background: none; border: none;
+      cursor: pointer; padding: 0; text-decoration: underline;
+      font-family: inherit; transition: color 0.2s;
+    }
+    .btn-change-photo:hover { color: var(--text); }
+
+    /* ── Textarea ─────────────────────────────────────────────── */
+    textarea {
+      width: 100%; background: transparent; border: none;
+      color: var(--text); font-family: inherit; font-size: 15px;
+      line-height: 1.6; resize: none; outline: none; min-height: 96px;
+    }
+    textarea::placeholder { color: var(--muted); }
+    .char-count { text-align: right; font-size: 11px; color: var(--muted); margin-top: 6px; }
+
+    /* ── Styles grid ──────────────────────────────────────────── */
+    .styles-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 7px; }
+    .style-btn {
+      background: rgba(255,255,255,0.03); border: 1px solid var(--border);
+      border-radius: 10px; padding: 10px 4px 8px; text-align: center;
+      cursor: pointer; transition: all 0.18s; color: var(--muted);
+      font-size: 11px; font-family: inherit;
+    }
+    .style-btn:hover { border-color: rgba(124,58,237,0.35); color: var(--text); }
+    .style-btn.active { background: rgba(124,58,237,0.18); border-color: var(--purple); color: var(--text); }
+    .style-emoji { font-size: 19px; display: block; margin-bottom: 4px; }
+
+    /* ── Generate button ──────────────────────────────────────── */
+    .btn-generate {
+      width: 100%; padding: 15px;
+      background: linear-gradient(135deg, #7c3aed 0%, #5b21b6 100%);
+      border: none; border-radius: var(--radius); color: white;
+      font-size: 16px; font-weight: 600; font-family: inherit;
+      cursor: pointer; transition: all 0.22s; letter-spacing: -0.2px;
+      margin-bottom: 12px;
+    }
+    .btn-generate:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 8px 28px rgba(124,58,237,0.45); }
+    .btn-generate:active:not(:disabled) { transform: translateY(0); }
+    .btn-generate:disabled { opacity: 0.45; cursor: not-allowed; transform: none; box-shadow: none; }
+
+    /* ── Error ────────────────────────────────────────────────── */
+    .error-msg {
+      display: none; background: rgba(239,68,68,0.08);
+      border: 1px solid rgba(239,68,68,0.2); border-radius: 10px;
+      padding: 11px 14px; font-size: 13px; color: #fca5a5;
+      text-align: center; margin-bottom: 12px;
+    }
+    .error-msg.show { display: block; }
+
+    /* ── Status card ──────────────────────────────────────────── */
+    .status-card { display: none; text-align: center; }
+    .status-card.show { display: block; }
+    .spinner {
+      width: 28px; height: 28px; border: 2.5px solid rgba(124,58,237,0.2);
+      border-top-color: var(--purple); border-radius: 50%;
+      animation: spin 0.75s linear infinite; margin: 0 auto 10px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .status-txt { font-size: 13px; color: var(--muted); margin-bottom: 12px; }
+    .steps { display: flex; gap: 5px; justify-content: center; }
+    .dot {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: rgba(255,255,255,0.12); transition: background 0.3s;
+    }
+    .dot.on { background: var(--purple-light); }
+
+    /* ── Video card ───────────────────────────────────────────── */
+    .video-card { display: none; }
+    .video-card.show { display: block; }
+    video { width: 100%; border-radius: 12px; display: block; background: #000; }
+    .prompt-reveal {
+      display: none; margin-top: 12px; padding: 12px;
+      background: rgba(0,0,0,0.25); border-radius: 10px;
+    }
+    .prompt-reveal.show { display: block; }
+    .prompt-tag { font-size: 10px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: rgba(167,139,250,0.6); margin-bottom: 5px; }
+    .prompt-body { font-size: 12px; color: rgba(232,232,244,0.65); line-height: 1.55; }
+
+    /* ── Subscribe ────────────────────────────────────────────── */
+    .subscribe-card { display: none; }
+    .subscribe-card.show { display: block; }
+    .btn-subscribe {
+      width: 100%; padding: 13px;
+      background: transparent; border: 1px solid rgba(124,58,237,0.4);
+      border-radius: var(--radius); color: var(--purple-light);
+      font-size: 14px; font-weight: 500; font-family: inherit;
+      cursor: pointer; transition: all 0.2s; margin-top: 4px;
+    }
+    .btn-subscribe:hover { background: rgba(124,58,237,0.1); border-color: var(--purple); }
+
+    /* ── Upload success flash ─────────────────────────────────── */
+    .upload-ok {
+      display: none; font-size: 11px; color: var(--green);
+      margin-top: 5px; align-items: center; gap: 4px;
+    }
+    .upload-ok.show { display: flex; }
+
+    #fileInput { display: none; }
+  </style>
+</head>
+<body>
+<input type="file" id="fileInput" accept="image/*">
+
+<div class="container">
+  <!-- Header -->
+  <header>
+    <div class="logo"><span class="logo-star">✦</span>Astra</div>
+    <div class="credits-pill" onclick="checkCredits()">
+      <span>✦</span>
+      <span class="credits-num" id="creditsNum">—</span>
+      <span>sueños</span>
+    </div>
+  </header>
+
+  <!-- Greeting -->
+  <div class="greeting">
+    <h1>¿Qué soñaste<br>esta noche?</h1>
+    <p>Cuéntame tu sueño y lo convertiré en video</p>
+  </div>
+
+  <!-- Face section -->
+  <div class="card">
+    <div class="card-label">¿Quieres aparecer en tu sueño?</div>
+
+    <!-- No photo -->
+    <div id="stateNoPhoto" class="face-row">
+      <div class="face-circle" onclick="triggerUpload()">
+        <svg class="face-cam" width="22" height="22" viewBox="0 0 24 24" fill="none"
+          stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/>
+          <circle cx="12" cy="13" r="4"/>
+        </svg>
+      </div>
+      <div class="face-body">
+        <div class="face-title">Sube tu foto</div>
+        <div class="face-sub">Aparecerás en tu sueño</div>
+      </div>
+      <button class="btn-upload-face" onclick="triggerUpload()">Subir</button>
+    </div>
+
+    <!-- Has photo -->
+    <div id="stateHasPhoto" class="face-row" style="display:none">
+      <div class="face-circle filled" id="faceCircle">
+        <img id="faceImg" src="" alt="Tu foto">
+      </div>
+      <div class="face-body">
+        <div class="toggle-row">
+          <label class="toggle" for="toggleCara">
+            <input type="checkbox" id="toggleCara" onchange="onToggle()">
+            <div class="toggle-track"></div>
+            <div class="toggle-thumb"></div>
+          </label>
+          <label class="toggle-label-text" for="toggleCara">Aparecer en mi sueño</label>
+        </div>
+        <div style="display:flex; align-items:center; gap:10px;">
+          <button class="btn-change-photo" onclick="triggerUpload()">Cambiar foto</button>
+          <div class="upload-ok" id="uploadOk">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+            Lista
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Dream input -->
+  <div class="card">
+    <div class="card-label">Describe tu sueño</div>
+    <textarea id="dreamText" placeholder="Estaba volando sobre una ciudad de nubes doradas cuando de repente aparecí en..." maxlength="500" oninput="updateCount()"></textarea>
+    <div class="char-count"><span id="charCount">0</span>/500</div>
+  </div>
+
+  <!-- Style selector -->
+  <div class="card">
+    <div class="card-label">Estilo visual</div>
+    <div class="styles-grid">
+      <button class="style-btn active" onclick="pickStyle('real',this)"><span class="style-emoji">🎬</span>Real</button>
+      <button class="style-btn" onclick="pickStyle('anime',this)"><span class="style-emoji">🌸</span>Anime</button>
+      <button class="style-btn" onclick="pickStyle('fantasy',this)"><span class="style-emoji">🧙</span>Fantasy</button>
+      <button class="style-btn" onclick="pickStyle('ghibli',this)"><span class="style-emoji">🌿</span>Ghibli</button>
+      <button class="style-btn" onclick="pickStyle('cyber',this)"><span class="style-emoji">⚡</span>Cyber</button>
+      <button class="style-btn" onclick="pickStyle('acuarela',this)"><span class="style-emoji">🎨</span>Acuarela</button>
+      <button class="style-btn" onclick="pickStyle('pixel',this)"><span class="style-emoji">👾</span>Pixel</button>
+      <button class="style-btn" onclick="pickStyle('terror',this)"><span class="style-emoji">👻</span>Terror</button>
+    </div>
+  </div>
+
+  <!-- Generate -->
+  <button class="btn-generate" id="btnGen" onclick="generate()">✦ Convertir en video</button>
+
+  <!-- Error -->
+  <div class="error-msg" id="errorMsg"></div>
+
+  <!-- Status -->
+  <div class="card status-card" id="statusCard">
+    <div class="spinner"></div>
+    <div class="status-txt" id="statusTxt">Preparando tu sueño…</div>
+    <div class="steps">
+      <div class="dot" id="d1"></div>
+      <div class="dot" id="d2"></div>
+      <div class="dot" id="d3"></div>
+    </div>
+  </div>
+
+  <!-- Video -->
+  <div class="card video-card" id="videoCard">
+    <video id="videoEl" controls playsinline></video>
+    <div class="prompt-reveal" id="promptReveal">
+      <div class="prompt-tag">✦ Visión cinematográfica</div>
+      <div class="prompt-body" id="promptBody"></div>
+    </div>
+  </div>
+
+  <!-- Subscribe -->
+  <div class="subscribe-card" id="subCard">
+    <button class="btn-subscribe" onclick="subscribe()">✦ Obtener más sueños — $12.99/mes</button>
+  </div>
+</div>
+
+<script>
+  // ── State ──────────────────────────────────────────────────────────────────
+  let userId      = localStorage.getItem('userId');
+  let fotoBase64  = localStorage.getItem('fotoUsuario');
+  let incluirCara = localStorage.getItem('incluirCara') === 'true';
+  let elementId   = localStorage.getItem('elementId');
+  let style       = 'real';
+  let busy        = false;
+  let poll        = null;
+
+  if (!userId) {
+    userId = 'u_' + Date.now() + '_' + Math.random().toString(36).slice(2,7);
+    localStorage.setItem('userId', userId);
+  }
+
+  // ── Boot ───────────────────────────────────────────────────────────────────
+  renderFace();
+  checkCredits();
+
+  const p = new URLSearchParams(location.search);
+  if (p.get('subscribed') === 'true') { setTimeout(checkCredits, 2000); history.replaceState({}, '', '/'); }
+
+  // ── Face ───────────────────────────────────────────────────────────────────
+  function renderFace() {
+    const no  = document.getElementById('stateNoPhoto');
+    const has = document.getElementById('stateHasPhoto');
+    if (fotoBase64) {
+      no.style.display  = 'none';
+      has.style.display = 'flex';
+      document.getElementById('faceImg').src = fotoBase64;
+      document.getElementById('toggleCara').checked = incluirCara;
+      if (elementId) document.getElementById('uploadOk').classList.add('show');
+    } else {
+      no.style.display  = 'flex';
+      has.style.display = 'none';
+    }
+  }
+
+  function triggerUpload() { document.getElementById('fileInput').click(); }
+
+  document.getElementById('fileInput').addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    e.target.value = '';
+
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      fotoBase64 = ev.target.result;
+      localStorage.setItem('fotoUsuario', fotoBase64);
+      elementId = null;
+      localStorage.removeItem('elementId');
+      document.getElementById('uploadOk').classList.remove('show');
+      incluirCara = true;
+      localStorage.setItem('incluirCara', 'true');
+      renderFace();
+      await uploadFace();
+    };
+    reader.readAsDataURL(file);
+  });
+
+  function onToggle() {
+    incluirCara = document.getElementById('toggleCara').checked;
+    localStorage.setItem('incluirCara', String(incluirCara));
+  }
+
+  async function uploadFace() {
+    try {
+      const r = await fetch('/api/user/upload-face', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, imageBase64: fotoBase64 }),
+      });
+      if (!r.ok) throw new Error('upload ' + r.status);
+      const d = await r.json();
+      elementId = d.elementId;
+      localStorage.setItem('elementId', elementId);
+      document.getElementById('uploadOk').classList.add('show');
+    } catch (err) {
+      console.warn('[FACE] Pre-upload falló, se reintentará al generar:', err.message);
+    }
+  }
+
+  // ── Credits ────────────────────────────────────────────────────────────────
+  async function checkCredits() {
+    try {
+      const r = await fetch('/credits/' + userId);
+      const d = await r.json();
+      const n = d.credits ?? 0;
+      document.getElementById('creditsNum').textContent = n;
+      document.getElementById('subCard').classList.toggle('show', n <= 0);
+    } catch { document.getElementById('creditsNum').textContent = '?'; }
+  }
+
+  async function subscribe() {
+    try {
+      const r = await fetch('/create-subscription', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, userEmail: '' }),
+      });
+      const d = await r.json();
+      if (d.url) location.href = d.url;
+    } catch { showErr('Error al iniciar suscripción.'); }
+  }
+
+  // ── Style ──────────────────────────────────────────────────────────────────
+  function pickStyle(s, btn) {
+    style = s;
+    document.querySelectorAll('.style-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+  }
+
+  function updateCount() {
+    document.getElementById('charCount').textContent = document.getElementById('dreamText').value.length;
+  }
+
+  // ── Generate ───────────────────────────────────────────────────────────────
+  async function generate() {
+    if (busy) return;
+    const text = document.getElementById('dreamText').value.trim();
+    if (!text) { showErr('Cuéntame tu sueño primero.'); return; }
+
+    hideErr();
+    busy = true;
+    setBtn(true);
+    showStatus('Enriqueciendo tu sueño con IA…', 0);
+
+    try {
+      // Upload face if needed
+      if (incluirCara && fotoBase64 && !elementId) {
+        showStatus('Subiendo tu foto…', 0);
+        await uploadFace();
+      }
+
+      const body = { text, style, userId };
+      if (incluirCara && elementId) { body.incluirCara = true; body.elementId = elementId; }
+
+      showStatus('Enviando a Seedance 2.0…', 1);
+      const r = await fetch('/api/dreams/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+
+      if (r.status === 402) {
+        showErr('Sin créditos. Suscríbete para seguir soñando.');
+        document.getElementById('subCard').classList.add('show');
+        return;
+      }
+      if (!r.ok) { const d = await r.json(); throw new Error(d.error || 'Error'); }
+
+      const data = await r.json();
+      if (data.enrichedPrompt && data.enrichedPrompt !== text) {
+        document.getElementById('promptBody').textContent = data.enrichedPrompt;
+        document.getElementById('promptReveal').classList.add('show');
+      }
+
+      showStatus('Renderizando video…', 2);
+      startPoll(data.operationName);
+
+    } catch (err) {
+      showErr(err.message || 'Error inesperado.');
+      resetUI();
+    }
+  }
+
+  function startPoll(opName) {
+    let tries = 0;
+    poll = setInterval(async () => {
+      if (++tries > 120) { clearInterval(poll); showErr('Tiempo agotado. Intenta de nuevo.'); resetUI(); return; }
+      try {
+        const r = await fetch('/api/dreams/status', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ operationName: opName }),
+        });
+        const d = await r.json();
+        if (d.done && d.videoUri) {
+          clearInterval(poll);
+          showVideo(d.videoUri);
+          checkCredits();
+        }
+      } catch { /* retry */ }
+    }, 5000);
+  }
+
+  function showVideo(url) {
+    document.getElementById('statusCard').classList.remove('show');
+    const vc = document.getElementById('videoCard');
+    const ve = document.getElementById('videoEl');
+    ve.src = url;
+    vc.classList.add('show');
+    ve.play().catch(() => {});
+    resetUI();
+  }
+
+  // ── UI helpers ─────────────────────────────────────────────────────────────
+  function setBtn(on) {
+    const b = document.getElementById('btnGen');
+    b.disabled = on;
+    b.textContent = on ? '✦ Generando…' : '✦ Convertir en video';
+  }
+
+  function showStatus(msg, step) {
+    document.getElementById('statusCard').classList.add('show');
+    document.getElementById('statusTxt').textContent = msg;
+    [1,2,3].forEach(i => document.getElementById('d'+i).classList.toggle('on', i <= step + 1));
+  }
+
+  function showErr(msg) {
+    const el = document.getElementById('errorMsg');
+    el.textContent = msg;
+    el.classList.add('show');
+  }
+
+  function hideErr() { document.getElementById('errorMsg').classList.remove('show'); }
+
+  function resetUI() {
+    busy = false;
+    setBtn(false);
+    document.getElementById('statusCard').classList.remove('show');
+  }
+</script>
+</body>
+</html>
