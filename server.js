@@ -88,6 +88,31 @@ const stylePrompts = {
   terror: "cinematic horror, dark atmosphere, tension, 4K",
 };
 
+async function enrichPromptWithClaude(originalPrompt) {
+  try {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': process.env.ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 1000,
+        system: "Eres un experto en convertir relatos de sueños en descripciones cinematográficas para generación de video con IA. Tu trabajo NO es inventar un sueño nuevo. Debes transformar el relato del usuario en una versión mucho más descriptiva, inmersiva y visual, manteniendo exactamente los mismos acontecimientos, personajes, lugares y acciones. REGLAS: Nunca cambies la historia. Nunca agregues personajes, objetos o eventos importantes que el usuario no mencionó. No alteres el orden de los acontecimientos. Enriquece únicamente los detalles visuales: iluminación, clima, colores, texturas, atmósfera, expresiones faciales, movimientos, profundidad, escala y emociones. Convierte frases simples en descripciones cinematográficas. Mantén el tono del sueño (feliz, terrorífico, extraño, surrealista, nostálgico). Si algún detalle no fue especificado, puedes inferir uno discreto que no cambie el significado. Devuelve ÚNICAMENTE el texto mejorado, sin explicaciones ni comentarios.",
+        messages: [{ role: 'user', content: originalPrompt }],
+      }),
+    });
+    if (!response.ok) throw new Error(`Claude API ${response.status}`);
+    const data = await response.json();
+    return data.content[0].text;
+  } catch (error) {
+    console.error('[ENRICH] Claude API falló, usando prompt original:', error.message);
+    return null;
+  }
+}
+
 app.get('/', (req, res) => {
   res.json({ status: 'Astra Backend funcionando' });
 });
@@ -155,7 +180,10 @@ app.post('/api/dreams/generate', async (req, res) => {
       }
     }
 
-    const fullPrompt = `${text}. ${stylePrompts[style] || 'cinematic, 4K'}`;
+    const enrichedText = await enrichPromptWithClaude(text);
+    const promptToUse = enrichedText || text;
+    console.log('[ENRICH] Prompt enriquecido:', enrichedText ? 'OK' : 'fallback a original');
+    const fullPrompt = `${promptToUse}. ${stylePrompts[style] || 'cinematic, 4K'}`;
 
     const higgsResp = await fetch('https://cloud.higgsfield.ai/api/v1/video/generate', {
       method: 'POST',
@@ -189,6 +217,8 @@ app.post('/api/dreams/generate', async (req, res) => {
       success: true,
       operationName: jobId,
       message: 'Generacion iniciada',
+      originalPrompt: text,
+      enrichedPrompt: enrichedText || text,
     });
   } catch (error) {
     console.error('[GENERATE] Error Higgsfield:', error);
