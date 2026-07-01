@@ -344,6 +344,47 @@ app.post('/api/users', (req, res) => {
   res.json({ success: true, user: users[userId] });
 });
 
+app.post('/api/admin/add-credits', async (req, res) => {
+  try {
+    const { userId, credits, adminKey } = req.body;
+    if (adminKey !== process.env.ADMIN_SECRET_KEY) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    if (!userId || typeof credits !== 'number') {
+      return res.status(400).json({ error: 'Faltan parametros' });
+    }
+
+    const { data: existing } = await supabase
+      .from('user_credits')
+      .select('credits_remaining')
+      .eq('user_id', userId)
+      .single();
+
+    const newCredits = (existing ? existing.credits_remaining : 0) + credits;
+
+    const { error } = await supabase
+      .from('user_credits')
+      .upsert({
+        user_id: userId,
+        credits_remaining: newCredits,
+      }, {
+        onConflict: 'user_id',
+        ignoreDuplicates: false,
+      });
+
+    if (error) {
+      console.error('[ADMIN-ADD-CREDITS] Error Supabase:', error);
+      return res.status(500).json({ error: error.message });
+    }
+
+    console.log('[ADMIN-ADD-CREDITS] Creditos actualizados para userId:', userId, '->', newCredits);
+    res.json({ success: true, credits: newCredits });
+  } catch (error) {
+    console.error('[ADMIN-ADD-CREDITS] Error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.listen(PORT, () => {
   console.log('Astra Backend en puerto ' + PORT);
 });
