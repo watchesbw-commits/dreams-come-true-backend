@@ -210,23 +210,22 @@ app.post('/api/dreams/generate', async (req, res) => {
     const fullPrompt = `${promptToUse}. ${stylePrompts[style] || 'cinematic, 4K'}`;
 
     const higgsBody = {
-      model: 'seedance-1-0-lite-t2v-250528',
       prompt: fullPrompt,
-      aspect_ratio: '9:16',
       duration: 5,
       resolution: '720p',
     };
 
     if (incluirCara && elementId) {
-      higgsBody.reference_image_url = elementId;
+      higgsBody.image_references = [{ type: 'image_url', image_url: elementId }];
       console.log('[GENERATE] Cara de referencia incluida:', elementId);
     }
 
-    const higgsResp = await fetch('https://cloud.higgsfield.ai/api/v1/video/generate', {
+    const higgsResp = await fetch('https://platform.higgsfield.ai/seedance_2_0', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${HIGGSFIELD_API_KEY}`,
+        'Authorization': `Key ${HIGGSFIELD_API_KEY}:${HIGGSFIELD_API_SECRET}`,
         'Content-Type': 'application/json',
+        'Accept': 'application/json',
       },
       body: JSON.stringify(higgsBody),
     });
@@ -238,7 +237,7 @@ app.post('/api/dreams/generate', async (req, res) => {
     }
 
     const higgsData = await higgsResp.json();
-    const jobId = higgsData.job_id;
+    const jobId = higgsData.request_id;
 
     operations[jobId] = jobId;
     if (userId) operationUsers[jobId] = userId;
@@ -266,9 +265,10 @@ app.post('/api/dreams/status', async (req, res) => {
 
     const jobId = operationName;
 
-    const higgsResp = await fetch(`https://cloud.higgsfield.ai/api/v1/jobs/${jobId}`, {
+    const higgsResp = await fetch(`https://platform.higgsfield.ai/requests/${jobId}/status`, {
       headers: {
-        'Authorization': `Bearer ${HIGGSFIELD_API_KEY}`,
+        'Authorization': `Key ${HIGGSFIELD_API_KEY}:${HIGGSFIELD_API_SECRET}`,
+        'Accept': 'application/json',
       },
     });
 
@@ -280,11 +280,16 @@ app.post('/api/dreams/status', async (req, res) => {
     const higgsData = await higgsResp.json();
     console.log('[STATUS]', jobId, '| status:', higgsData.status);
 
+    if (higgsData.status === 'failed' || higgsData.status === 'nsfw') {
+      console.error('[STATUS] Job fallo:', JSON.stringify(higgsData));
+      return res.status(500).json({ error: 'La generacion del video fallo' });
+    }
+
     if (higgsData.status !== 'completed') {
       return res.json({ done: false, message: 'Generando...' });
     }
 
-    const videoUrl = higgsData.output?.video_url;
+    const videoUrl = higgsData.video?.url;
     if (!videoUrl) {
       console.error('[STATUS] Job completado pero no hay video_url:', JSON.stringify(higgsData));
       return res.status(500).json({ error: 'Job completado pero no se encontro el video_url' });
