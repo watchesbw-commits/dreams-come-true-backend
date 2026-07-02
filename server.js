@@ -29,6 +29,7 @@ const bucket = storage.bucket(GCS_BUCKET);
 const app = express();
 const PORT = process.env.PORT || 3000;
 const BACKEND_URL = 'https://dreams-come-true-backend.onrender.com';
+const FRONTEND_URL = (process.env.FRONTEND_URL || '').trim();
 
 app.use(cors());
 
@@ -118,17 +119,6 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', time: new Date().toISOString() });
 });
 
-// TEMPORARY DEBUG ENDPOINT - remove after diagnosing FRONTEND_URL issue
-app.get('/debug-env', (req, res) => {
-  const raw = process.env.FRONTEND_URL;
-  res.json({
-    frontendUrlRaw: JSON.stringify(raw),
-    frontendUrlLength: raw ? raw.length : null,
-    frontendUrlCharCodes: raw ? Array.from(raw).map(c => c.charCodeAt(0)) : null,
-    builtSuccessUrl: `${raw}?subscribed=true`,
-  });
-});
-
 app.post('/create-subscription', async (req, res) => {
   try {
     const { userId, userEmail } = req.body;
@@ -137,8 +127,8 @@ app.post('/create-subscription', async (req, res) => {
       payment_method_types: ['card'],
       customer_email: userEmail,
       line_items: [{ price: process.env.STRIPE_PRICE_ID, quantity: 1 }],
-      success_url: `${process.env.FRONTEND_URL}?subscribed=true`,
-      cancel_url: `${process.env.FRONTEND_URL}?cancelled=true`,
+      success_url: `${FRONTEND_URL}?subscribed=true`,
+      cancel_url: `${FRONTEND_URL}?cancelled=true`,
       subscription_data: { metadata: { userId } },
     });
     res.json({ url: session.url });
