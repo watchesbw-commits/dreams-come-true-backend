@@ -6,10 +6,10 @@ import { createClient } from '@supabase/supabase-js';
 import { WebSocket } from 'ws';
 globalThis.WebSocket = WebSocket;
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+const stripe = new Stripe((process.env.STRIPE_SECRET_KEY || '').trim());
 
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
+const supabaseUrl = (process.env.SUPABASE_URL || '').trim();
+const supabaseKey = (process.env.SUPABASE_SERVICE_KEY || '').trim();
 if (!supabaseUrl || !supabaseKey) {
   console.error('Faltan variables SUPABASE_URL o SUPABASE_SERVICE_KEY');
   process.exit(1);
@@ -30,6 +30,12 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const BACKEND_URL = 'https://dreams-come-true-backend.onrender.com';
 const FRONTEND_URL = (process.env.FRONTEND_URL || '').trim();
+const HIGGSFIELD_API_KEY = (process.env.HIGGSFIELD_API_KEY || '').trim();
+const HIGGSFIELD_API_SECRET = (process.env.HIGGSFIELD_API_SECRET || '').trim();
+const ANTHROPIC_API_KEY = (process.env.ANTHROPIC_API_KEY || '').trim();
+const STRIPE_WEBHOOK_SECRET = (process.env.STRIPE_WEBHOOK_SECRET || '').trim();
+const STRIPE_PRICE_ID = (process.env.STRIPE_PRICE_ID || '').trim();
+const ADMIN_SECRET_KEY = (process.env.ADMIN_SECRET_KEY || '').trim();
 
 app.use(cors());
 
@@ -38,7 +44,7 @@ app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res)
   const sig = req.headers['stripe-signature'];
   let event;
   try {
-    event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
+    event = stripe.webhooks.constructEvent(req.body, sig, STRIPE_WEBHOOK_SECRET);
   } catch (err) {
     console.error('[WEBHOOK] Firma invalida:', err.message);
     return res.status(400).send(`Webhook Error: ${err.message}`);
@@ -95,7 +101,7 @@ async function enrichPromptWithClaude(originalPrompt) {
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
-        'x-api-key': process.env.ANTHROPIC_API_KEY,
+        'x-api-key': ANTHROPIC_API_KEY,
         'anthropic-version': '2023-06-01',
         'content-type': 'application/json',
       },
@@ -119,55 +125,6 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', time: new Date().toISOString() });
 });
 
-// TEMPORARY DEBUG ENDPOINT - audits env vars for whitespace/newline issues without exposing values
-app.get('/debug-env-audit', (req, res) => {
-  const varsToCheck = [
-    'ADMIN_SECRET_KEY',
-    'GCS_CREDENTIALS_JSON',
-    'HIGGSFIELD_API_KEY',
-    'HIGGSFIELD_API_SECRET',
-    'STRIPE_PRICE_ID',
-    'STRIPE_SECRET_KEY',
-    'STRIPE_WEBHOOK_SECRET',
-    'SUPABASE_URL',
-    'SUPABASE_SERVICE_KEY',
-    'ANTHROPIC_API_KEY',
-  ];
-
-  const report = {};
-  for (const name of varsToCheck) {
-    const raw = process.env[name];
-    if (raw === undefined) {
-      report[name] = { present: false };
-      continue;
-    }
-    const entry = {
-      present: true,
-      length: raw.length,
-      hasLeadingWhitespace: /^\s/.test(raw),
-      hasTrailingWhitespace: /\s$/.test(raw),
-      hasCR: raw.includes('\r'),
-      hasLF: raw.includes('\n'),
-      hasWrappingDoubleQuotes: raw.startsWith('"') && raw.endsWith('"'),
-      hasWrappingSingleQuotes: raw.startsWith("'") && raw.endsWith("'"),
-      trimmedLength: raw.trim().length,
-    };
-    if (name === 'GCS_CREDENTIALS_JSON') {
-      try {
-        const parsed = JSON.parse(raw);
-        entry.jsonParseable = true;
-        entry.jsonKeys = Object.keys(parsed);
-      } catch (err) {
-        entry.jsonParseable = false;
-        entry.jsonParseError = err.message;
-      }
-    }
-    report[name] = entry;
-  }
-
-  res.json(report);
-});
-
 app.post('/create-subscription', async (req, res) => {
   try {
     const { userId, userEmail } = req.body;
@@ -175,7 +132,7 @@ app.post('/create-subscription', async (req, res) => {
       mode: 'subscription',
       payment_method_types: ['card'],
       customer_email: userEmail,
-      line_items: [{ price: process.env.STRIPE_PRICE_ID, quantity: 1 }],
+      line_items: [{ price: STRIPE_PRICE_ID, quantity: 1 }],
       success_url: `${FRONTEND_URL}?subscribed=true`,
       cancel_url: `${FRONTEND_URL}?cancelled=true`,
       subscription_data: { metadata: { userId } },
@@ -268,7 +225,7 @@ app.post('/api/dreams/generate', async (req, res) => {
     const higgsResp = await fetch('https://cloud.higgsfield.ai/api/v1/video/generate', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${process.env.HIGGSFIELD_API_KEY}`,
+        'Authorization': `Bearer ${HIGGSFIELD_API_KEY}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(higgsBody),
@@ -311,7 +268,7 @@ app.post('/api/dreams/status', async (req, res) => {
 
     const higgsResp = await fetch(`https://cloud.higgsfield.ai/api/v1/jobs/${jobId}`, {
       headers: {
-        'Authorization': `Bearer ${process.env.HIGGSFIELD_API_KEY}`,
+        'Authorization': `Bearer ${HIGGSFIELD_API_KEY}`,
       },
     });
 
@@ -397,7 +354,7 @@ app.post('/api/users', (req, res) => {
 app.post('/api/admin/add-credits', async (req, res) => {
   try {
     const { userId, credits, adminKey } = req.body;
-    if (adminKey !== process.env.ADMIN_SECRET_KEY) {
+    if (adminKey !== ADMIN_SECRET_KEY) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
     if (!userId || typeof credits !== 'number') {
