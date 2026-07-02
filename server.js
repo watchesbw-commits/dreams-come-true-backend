@@ -118,6 +118,17 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', time: new Date().toISOString() });
 });
 
+// TEMPORARY DEBUG ENDPOINT - remove after diagnosing FRONTEND_URL issue
+app.get('/debug-env', (req, res) => {
+  const raw = process.env.FRONTEND_URL;
+  res.json({
+    frontendUrlRaw: JSON.stringify(raw),
+    frontendUrlLength: raw ? raw.length : null,
+    frontendUrlCharCodes: raw ? Array.from(raw).map(c => c.charCodeAt(0)) : null,
+    builtSuccessUrl: `${raw}?subscribed=true`,
+  });
+});
+
 app.post('/create-subscription', async (req, res) => {
   try {
     const { userId, userEmail } = req.body;
