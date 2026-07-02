@@ -119,6 +119,55 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', time: new Date().toISOString() });
 });
 
+// TEMPORARY DEBUG ENDPOINT - audits env vars for whitespace/newline issues without exposing values
+app.get('/debug-env-audit', (req, res) => {
+  const varsToCheck = [
+    'ADMIN_SECRET_KEY',
+    'GCS_CREDENTIALS_JSON',
+    'HIGGSFIELD_API_KEY',
+    'HIGGSFIELD_API_SECRET',
+    'STRIPE_PRICE_ID',
+    'STRIPE_SECRET_KEY',
+    'STRIPE_WEBHOOK_SECRET',
+    'SUPABASE_URL',
+    'SUPABASE_SERVICE_KEY',
+    'ANTHROPIC_API_KEY',
+  ];
+
+  const report = {};
+  for (const name of varsToCheck) {
+    const raw = process.env[name];
+    if (raw === undefined) {
+      report[name] = { present: false };
+      continue;
+    }
+    const entry = {
+      present: true,
+      length: raw.length,
+      hasLeadingWhitespace: /^\s/.test(raw),
+      hasTrailingWhitespace: /\s$/.test(raw),
+      hasCR: raw.includes('\r'),
+      hasLF: raw.includes('\n'),
+      hasWrappingDoubleQuotes: raw.startsWith('"') && raw.endsWith('"'),
+      hasWrappingSingleQuotes: raw.startsWith("'") && raw.endsWith("'"),
+      trimmedLength: raw.trim().length,
+    };
+    if (name === 'GCS_CREDENTIALS_JSON') {
+      try {
+        const parsed = JSON.parse(raw);
+        entry.jsonParseable = true;
+        entry.jsonKeys = Object.keys(parsed);
+      } catch (err) {
+        entry.jsonParseable = false;
+        entry.jsonParseError = err.message;
+      }
+    }
+    report[name] = entry;
+  }
+
+  res.json(report);
+});
+
 app.post('/create-subscription', async (req, res) => {
   try {
     const { userId, userEmail } = req.body;
