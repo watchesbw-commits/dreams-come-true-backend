@@ -125,29 +125,6 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', time: new Date().toISOString() });
 });
 
-// TEMPORARY DEBUG ENDPOINT - introspects the live Supabase schema via PostgREST's OpenAPI root
-app.get('/debug-supabase-schema', async (req, res) => {
-  try {
-    const resp = await fetch(`${supabaseUrl}/rest/v1/`, {
-      headers: {
-        apikey: supabaseKey,
-        Authorization: `Bearer ${supabaseKey}`,
-      },
-    });
-    if (!resp.ok) {
-      return res.status(502).json({ error: `PostgREST respondió ${resp.status}` });
-    }
-    const spec = await resp.json();
-    const tables = {};
-    for (const [path, def] of Object.entries(spec.definitions || {})) {
-      tables[path] = Object.keys(def.properties || {});
-    }
-    res.json({ tables });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
 app.post('/create-subscription', async (req, res) => {
   try {
     const { userId, userEmail } = req.body;
