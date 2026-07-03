@@ -79,7 +79,6 @@ app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res)
 app.use(express.json());
 app.use(express.static('public'));
 
-const dreams = [];
 const users = {};
 const operations = {};
 const videoUris = {};
@@ -188,8 +187,8 @@ app.post('/api/user/upload-face', async (req, res) => {
 
 app.post('/api/dreams/generate', async (req, res) => {
   try {
-    const { text, style, userId, incluirCara, elementId } = req.body;
-    if (!text || !style) {
+    const { text, style, userId, incluirCara, elementId, isPublic } = req.body;
+    if (!text) {
       return res.status(400).json({ error: 'Faltan parametros' });
     }
 
@@ -240,7 +239,7 @@ app.post('/api/dreams/generate', async (req, res) => {
     const jobId = higgsData.request_id;
 
     operations[jobId] = jobId;
-    if (userId) operationUsers[jobId] = userId;
+    operationUsers[jobId] = { userId, text, style, isPublic: !!isPublic };
     console.log('[GENERATE] Job Higgsfield creado:', jobId);
 
     res.json({
@@ -312,7 +311,8 @@ app.post('/api/dreams/status', async (req, res) => {
     videoUris[operationName] = publicUrl;
     console.log('[STATUS] Video subido a GCS:', publicUrl);
 
-    const userId = operationUsers[operationName];
+    const meta = operationUsers[operationName];
+    const userId = meta?.userId;
     if (userId) {
       const { data: creditData } = await supabase
         .from('user_credits')
@@ -325,6 +325,19 @@ app.post('/api/dreams/status', async (req, res) => {
           .update({ credits_remaining: creditData.credits_remaining - 1 })
           .eq('user_id', userId);
         console.log('[STATUS] Credito descontado para userId:', userId);
+      }
+
+      const { error: insertError } = await supabase.from('dreams').insert({
+        user_id: userId,
+        text: meta.text,
+        style: meta.style || null,
+        video_url: publicUrl,
+        is_public: meta.isPublic,
+      });
+      if (insertError) {
+        console.error('[STATUS] Error guardando dream en Supabase:', insertError);
+      } else {
+        console.log('[STATUS] Dream guardado en Supabase, is_public:', meta.isPublic);
       }
     }
 
@@ -345,8 +358,28 @@ app.get('/api/dreams/video', (req, res) => {
   res.redirect(gcsUrl);
 });
 
-app.get('/api/dreams/community', (req, res) => {
-  res.json({ dreams: dreams.filter(d => d.isPublic), total: dreams.length });
+app.get('/api/dreams/community', async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit, 10) || 20, 100);
+    const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+
+    const { data, error, count } = await supabase
+      .from('dreams')
+      .select('id, user_id, text, style, video_url, created_at', { count: 'exact' })
+      .eq('is_public', true)
+      .order('created_at', { ascending: false })
+      .range(offset, offset + limit - 1);
+
+    if (error) {
+      console.error('[COMMUNITY] Error consultando Supabase:', error);
+      return res.status(500).json({ error: error.message });
+    }
+
+    res.json({ dreams: data, total: count, limit, offset });
+  } catch (error) {
+    console.error('[COMMUNITY] Error:', error);
+    res.status(500).json({ error: error.message });
+  }
 });
 
 app.post('/api/users', (req, res) => {
