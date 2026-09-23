@@ -85,14 +85,14 @@ const videoUris = {};
 const operationUsers = {};
 
 const stylePrompts = {
-  real: "photorealistic, cinematic, 4K",
-  anime: "epic anime style, vibrant colors, 4K",
-  cyber: "cyberpunk, neon, futuristic, electric lights, 4K",
-  fantasy: "epic fantasy, magical, fantastic colors, 4K",
-  ghibli: "Studio Ghibli style, digital watercolor, magical nature, 4K",
-  acuarela: "artistic watercolor, soft colors, beautiful, 4K",
-  pixel: "retro pixel art, vibrant, 8-bit style, 4K",
-  terror: "cinematic horror, dark atmosphere, tension, 4K",
+  real: "photorealistic, cinematic, 1080p",
+  anime: "epic anime style, vibrant colors, 1080p",
+  cyber: "cyberpunk, neon, futuristic, electric lights, 1080p",
+  fantasy: "epic fantasy, magical, fantastic colors, 1080p",
+  ghibli: "Studio Ghibli style, digital watercolor, magical nature, 1080p",
+  acuarela: "artistic watercolor, soft colors, beautiful, 1080p",
+  pixel: "retro pixel art, vibrant, 8-bit style, 1080p",
+  terror: "cinematic horror, dark atmosphere, tension, 1080p",
 };
 
 async function enrichPromptWithClaude(originalPrompt) {
@@ -206,27 +206,30 @@ app.post('/api/dreams/generate', async (req, res) => {
     const enrichedText = await enrichPromptWithClaude(text);
     const promptToUse = enrichedText || text;
     console.log('[ENRICH] Prompt enriquecido:', enrichedText ? 'OK' : 'fallback a original');
-    const fullPrompt = `${promptToUse}. ${stylePrompts[style] || 'cinematic, 4K'}`;
+    const fullPrompt = `${promptToUse}. ${stylePrompts[style] || 'cinematic, 1080p'}`;
 
-    const higgsBody = {
+    const higgsParams = {
+      mode: 't2v',
       prompt: fullPrompt,
-      duration: 5,
+      duration: 8,
       resolution: '720p',
+      generate_audio: true,
+      bitrate_mode: 'standard',
+      aspect_ratio: '9:16',
     };
 
     if (incluirCara && elementId) {
-      higgsBody.image_references = [{ type: 'image_url', image_url: elementId }];
-      console.log('[GENERATE] Cara de referencia incluida:', elementId);
+      console.log('[GENERATE] Cara de referencia incluida (ignorada en modo t2v):', elementId);
     }
 
-    const higgsResp = await fetch('https://platform.higgsfield.ai/seedance_2_0', {
+    const higgsResp = await fetch('https://platform.higgsfield.ai/seedance_2_5', {
       method: 'POST',
       headers: {
         'Authorization': `Key ${HIGGSFIELD_API_KEY}:${HIGGSFIELD_API_SECRET}`,
         'Content-Type': 'application/json',
         'Accept': 'application/json',
       },
-      body: JSON.stringify(higgsBody),
+      body: JSON.stringify({ params: higgsParams }),
     });
 
     if (!higgsResp.ok) {
