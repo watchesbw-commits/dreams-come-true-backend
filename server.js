@@ -370,6 +370,31 @@ app.get('/api/dreams/video', (req, res) => {
   res.redirect(gcsUrl);
 });
 
+app.get('/api/dreams/user/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const limit = Math.min(parseInt(req.query.limit, 10) || 10, 50);
+
+    const { data, error } = await supabase
+      .from('dreams')
+      .select('id, user_id, text, style, video_url, created_at')
+      .eq('user_id', userId)
+      .not('video_url', 'is', null)
+      .order('created_at', { ascending: false })
+      .limit(limit);
+
+    if (error) {
+      console.error('[USER DREAMS] Error:', error);
+      return res.status(500).json({ error: error.message });
+    }
+
+    res.json({ dreams: data || [] });
+  } catch (error) {
+    console.error('[USER DREAMS] Error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.get('/api/dreams/community', async (req, res) => {
   try {
     const limit = Math.min(parseInt(req.query.limit, 10) || 20, 100);
