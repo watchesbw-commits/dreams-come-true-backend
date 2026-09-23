@@ -208,21 +208,29 @@ app.post('/api/dreams/generate', async (req, res) => {
     console.log('[ENRICH] Prompt enriquecido:', enrichedText ? 'OK' : 'fallback a original');
     const fullPrompt = `${promptToUse}. ${stylePrompts[style] || 'cinematic'}`;
 
+    const usarCara = !!(incluirCara && elementId);
+
     const higgsBody = {
       prompt: fullPrompt,
       duration: 8,
       resolution: '720p',
-      aspect_ratio: '9:16',
       bitrate_mode: 'high',
       output_format: 'mp4',
       generate_audio: true,
     };
 
-    if (incluirCara && elementId) {
-      console.log('[GENERATE] Cara no soportada en seedance-2.5 text-to-video, ignorada.');
+    if (usarCara) {
+      higgsBody.image_url = elementId;
+      console.log('[GENERATE] Cara incluida (image-to-video):', elementId);
     }
 
-    const higgsResp = await fetch('https://api.higgsfield.ai/bytedance/seedance-2.5/text-to-video', {
+    const higgsEndpoint = usarCara
+      ? 'https://api.higgsfield.ai/bytedance/seedance-2.5/image-to-video'
+      : 'https://api.higgsfield.ai/bytedance/seedance-2.5/text-to-video';
+
+    console.log('[GENERATE] Modo:', usarCara ? 'image-to-video' : 'text-to-video');
+
+    const higgsResp = await fetch(higgsEndpoint, {
       method: 'POST',
       headers: {
         'Authorization': `Key ${HIGGSFIELD_API_KEY}:${HIGGSFIELD_API_SECRET}`,
