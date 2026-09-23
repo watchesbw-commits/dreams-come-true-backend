@@ -324,7 +324,6 @@ app.post('/api/dreams/status', async (req, res) => {
     videoUris[operationName] = publicUrl;
     console.log('[STATUS] Video subido a GCS:', publicUrl);
 
-    const meta = operationUsers[operationName];
     const userId = meta?.userId;
     if (userId) {
       const { data: creditData } = await supabase
