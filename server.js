@@ -209,17 +209,19 @@ app.post('/api/dreams/generate', async (req, res) => {
     const fullPrompt = `${promptToUse}. ${stylePrompts[style] || 'cinematic, 1080p'}`;
 
     const higgsParams = {
-      mode: 't2v',
+      mode: incluirCara && elementId ? 'omni_reference' : 't2v',
       prompt: fullPrompt,
       duration: 8,
       resolution: '720p',
       generate_audio: true,
-      bitrate_mode: 'standard',
       aspect_ratio: '9:16',
     };
 
+    const higgsBody = { params: higgsParams };
+
     if (incluirCara && elementId) {
-      console.log('[GENERATE] Cara de referencia incluida (ignorada en modo t2v):', elementId);
+      higgsBody.medias = [{ role: 'image_references', url: elementId }];
+      console.log('[GENERATE] Cara incluida, modo omni_reference:', elementId);
     }
 
     const higgsResp = await fetch('https://platform.higgsfield.ai/seedance_2_5', {
@@ -229,7 +231,7 @@ app.post('/api/dreams/generate', async (req, res) => {
         'Content-Type': 'application/json',
         'Accept': 'application/json',
       },
-      body: JSON.stringify({ params: higgsParams }),
+      body: JSON.stringify(higgsBody),
     });
 
     if (!higgsResp.ok) {
