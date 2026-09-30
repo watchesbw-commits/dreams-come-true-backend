@@ -233,7 +233,7 @@ app.post('/api/dreams/generate', async (req, res) => {
     const higgsResp = await fetch(higgsEndpoint, {
       method: 'POST',
       headers: {
-        'Authorization': `Key ${HIGGSFIELD_API_KEY}:${HIGGSFIELD_API_SECRET}`,
+        'Authorization': `Key ${HIGGSFIELD_API_KEY}`,
         'Content-Type': 'application/json',
         'Accept': 'application/json',
       },
@@ -279,7 +279,7 @@ app.post('/api/dreams/status', async (req, res) => {
 
     const higgsResp = await fetch(statusUrl, {
       headers: {
-        'Authorization': `Key ${HIGGSFIELD_API_KEY}:${HIGGSFIELD_API_SECRET}`,
+        'Authorization': `Key ${HIGGSFIELD_API_KEY}`,
         'Accept': 'application/json',
       },
     });
