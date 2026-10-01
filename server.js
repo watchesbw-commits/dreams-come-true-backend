@@ -212,7 +212,7 @@ app.post('/api/dreams/generate', async (req, res) => {
 
     const higgsBody = {
       prompt: fullPrompt,
-      duration: 8,
+      duration: 4,
       resolution: '720p',
       bitrate_mode: 'high',
       output_format: 'mp4',
