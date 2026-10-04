@@ -42,6 +42,28 @@ const PLANES = {
   premium: { priceId: (process.env.STRIPE_PRICE_PREMIUM || '').trim(), credits: 5, duration: 30, resolution: '720p', label: 'Premium'   },
 };
 
+// Devuelve la clave del plan por price_id (para customer.subscription.updated)
+function getPlanKeyByPriceId(priceId) {
+  for (const [key, plan] of Object.entries(PLANES)) {
+    if (plan.priceId && plan.priceId === priceId) return key;
+  }
+  return null;
+}
+
+// Idempotencia: retorna true si el evento ya fue procesado
+async function isEventAlreadyProcessed(eventId) {
+  const { data } = await supabase
+    .from('stripe_events')
+    .select('id')
+    .eq('event_id', eventId)
+    .maybeSingle();
+  return !!data;
+}
+
+async function markEventProcessed(eventId, eventType) {
+  await supabase.from('stripe_events').insert({ event_id: eventId, event_type: eventType });
+}
+
 app.use(cors());
 
 // Webhook debe ir ANTES de express.json()
@@ -55,10 +77,49 @@ app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res)
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
 
-  if (event.type === 'checkout.session.completed') {
-    const session = event.data.object;
-    if (session.mode === 'subscription') {
-      const subscription = await stripe.subscriptions.retrieve(session.subscription);
+  // Idempotencia: ignorar si ya procesamos este evento
+  try {
+    if (await isEventAlreadyProcessed(event.id)) {
+      console.log('[WEBHOOK] Evento duplicado ignorado:', event.id);
+      return res.json({ received: true });
+    }
+  } catch (e) {
+    console.error('[WEBHOOK] Error verificando idempotencia:', e.message);
+  }
+
+  try {
+    if (event.type === 'checkout.session.completed') {
+      const session = event.data.object;
+      if (session.mode === 'subscription') {
+        const subscription = await stripe.subscriptions.retrieve(session.subscription);
+        // userId puede venir de metadata o de client_reference_id
+        const userId = subscription.metadata.userId || session.client_reference_id;
+        const planKey = subscription.metadata.planKey || 'basico';
+        const plan = PLANES[planKey] || PLANES.basico;
+        if (userId) {
+          await supabase.from('user_credits').upsert({
+            user_id: userId,
+            credits_remaining: plan.credits,
+            subscription_status: 'active',
+            plan: planKey,
+            stripe_customer_id: session.customer,
+            stripe_subscription_id: subscription.id,
+            current_period_start: new Date(subscription.current_period_start * 1000).toISOString(),
+            current_period_end: new Date(subscription.current_period_end * 1000).toISOString(),
+          }, { onConflict: 'user_id' });
+          console.log('[WEBHOOK] checkout.session.completed userId:', userId, 'plan:', planKey, 'credits:', plan.credits);
+        } else {
+          console.warn('[WEBHOOK] checkout.session.completed sin userId en metadata ni client_reference_id');
+        }
+      }
+
+    } else if (event.type === 'invoice.paid') {
+      const invoice = event.data.object;
+      if (!invoice.subscription) {
+        await markEventProcessed(event.id, event.type);
+        return res.json({ received: true });
+      }
+      const subscription = await stripe.subscriptions.retrieve(invoice.subscription);
       const userId = subscription.metadata.userId;
       const planKey = subscription.metadata.planKey || 'basico';
       const plan = PLANES[planKey] || PLANES.basico;
@@ -68,57 +129,50 @@ app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res)
           credits_remaining: plan.credits,
           subscription_status: 'active',
           plan: planKey,
-          stripe_customer_id: session.customer,
           stripe_subscription_id: subscription.id,
           current_period_start: new Date(subscription.current_period_start * 1000).toISOString(),
           current_period_end: new Date(subscription.current_period_end * 1000).toISOString(),
         }, { onConflict: 'user_id' });
-        console.log('[WEBHOOK] checkout.session.completed userId:', userId, 'plan:', planKey, 'credits:', plan.credits);
+        console.log('[WEBHOOK] invoice.paid userId:', userId, 'plan:', planKey, 'credits renovados:', plan.credits);
       }
+
+    } else if (event.type === 'customer.subscription.updated') {
+      const subscription = event.data.object;
+      const userId = subscription.metadata.userId;
+      // Determinar plan por price_id del item activo (más confiable que metadata)
+      const priceId = subscription.items?.data?.[0]?.price?.id;
+      const planKeyByPrice = priceId ? getPlanKeyByPriceId(priceId) : null;
+      const planKey = planKeyByPrice || subscription.metadata.planKey || 'basico';
+      if (userId) {
+        await supabase.from('user_credits')
+          .update({
+            subscription_status: subscription.status === 'active' ? 'active' : subscription.status,
+            plan: planKey,
+            current_period_start: new Date(subscription.current_period_start * 1000).toISOString(),
+            current_period_end: new Date(subscription.current_period_end * 1000).toISOString(),
+          })
+          .eq('user_id', userId);
+        console.log('[WEBHOOK] subscription.updated userId:', userId, 'status:', subscription.status, 'plan:', planKey);
+      }
+
+    } else if (event.type === 'customer.subscription.deleted') {
+      const subscription = event.data.object;
+      const userId = subscription.metadata.userId;
+      if (userId) {
+        await supabase.from('user_credits')
+          .update({ subscription_status: 'cancelled', credits_remaining: 0 })
+          .eq('user_id', userId);
+        console.log('[WEBHOOK] subscription.deleted userId:', userId);
+      }
+
+    } else {
+      console.log('[WEBHOOK] Evento no manejado (ignorado):', event.type);
     }
-  } else if (event.type === 'invoice.paid') {
-    const invoice = event.data.object;
-    if (!invoice.subscription) return res.json({ received: true });
-    const subscription = await stripe.subscriptions.retrieve(invoice.subscription);
-    const userId = subscription.metadata.userId;
-    const planKey = subscription.metadata.planKey || 'basico';
-    const plan = PLANES[planKey] || PLANES.basico;
-    if (userId) {
-      await supabase.from('user_credits').upsert({
-        user_id: userId,
-        credits_remaining: plan.credits,
-        subscription_status: 'active',
-        plan: planKey,
-        stripe_subscription_id: subscription.id,
-        current_period_start: new Date(subscription.current_period_start * 1000).toISOString(),
-        current_period_end: new Date(subscription.current_period_end * 1000).toISOString(),
-      }, { onConflict: 'user_id' });
-      console.log('[WEBHOOK] invoice.paid userId:', userId, 'plan:', planKey, 'credits renovados:', plan.credits);
-    }
-  } else if (event.type === 'customer.subscription.updated') {
-    const subscription = event.data.object;
-    const userId = subscription.metadata.userId;
-    const planKey = subscription.metadata.planKey || 'basico';
-    if (userId) {
-      await supabase.from('user_credits')
-        .update({
-          subscription_status: subscription.status === 'active' ? 'active' : subscription.status,
-          plan: planKey,
-          current_period_start: new Date(subscription.current_period_start * 1000).toISOString(),
-          current_period_end: new Date(subscription.current_period_end * 1000).toISOString(),
-        })
-        .eq('user_id', userId);
-      console.log('[WEBHOOK] subscription.updated userId:', userId, 'status:', subscription.status);
-    }
-  } else if (event.type === 'customer.subscription.deleted') {
-    const subscription = event.data.object;
-    const userId = subscription.metadata.userId;
-    if (userId) {
-      await supabase.from('user_credits')
-        .update({ subscription_status: 'cancelled', credits_remaining: 0 })
-        .eq('user_id', userId);
-      console.log('[WEBHOOK] subscription.deleted userId:', userId);
-    }
+
+    await markEventProcessed(event.id, event.type);
+  } catch (err) {
+    console.error('[WEBHOOK] Error procesando evento', event.type, ':', err.message);
+    return res.status(500).json({ error: 'Error interno procesando webhook' });
   }
 
   res.json({ received: true });
