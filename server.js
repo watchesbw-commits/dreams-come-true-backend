@@ -34,8 +34,13 @@ const HIGGSFIELD_API_KEY = (process.env.HIGGSFIELD_API_KEY || '').trim();
 const HIGGSFIELD_API_SECRET = (process.env.HIGGSFIELD_API_SECRET || '').trim();
 const ANTHROPIC_API_KEY = (process.env.ANTHROPIC_API_KEY || '').trim();
 const STRIPE_WEBHOOK_SECRET = (process.env.STRIPE_WEBHOOK_SECRET || '').trim();
-const STRIPE_PRICE_ID = (process.env.STRIPE_PRICE_ID || '').trim();
 const ADMIN_SECRET_KEY = (process.env.ADMIN_SECRET_KEY || '').trim();
+
+const PLANES = {
+  basico:  { priceId: (process.env.STRIPE_PRICE_BASICO  || '').trim(), credits: 3, duration: 8,  resolution: '720p', label: 'Básico'   },
+  pro:     { priceId: (process.env.STRIPE_PRICE_PRO     || '').trim(), credits: 5, duration: 15, resolution: '720p', label: 'Pro'       },
+  premium: { priceId: (process.env.STRIPE_PRICE_PREMIUM || '').trim(), credits: 5, duration: 30, resolution: '720p', label: 'Premium'   },
+};
 
 app.use(cors());
 
@@ -50,26 +55,69 @@ app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res)
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
 
-  if (event.type === 'invoice.payment_succeeded') {
+  if (event.type === 'checkout.session.completed') {
+    const session = event.data.object;
+    if (session.mode === 'subscription') {
+      const subscription = await stripe.subscriptions.retrieve(session.subscription);
+      const userId = subscription.metadata.userId;
+      const planKey = subscription.metadata.planKey || 'basico';
+      const plan = PLANES[planKey] || PLANES.basico;
+      if (userId) {
+        await supabase.from('user_credits').upsert({
+          user_id: userId,
+          credits_remaining: plan.credits,
+          subscription_status: 'active',
+          plan: planKey,
+          stripe_customer_id: session.customer,
+          stripe_subscription_id: subscription.id,
+          current_period_start: new Date(subscription.current_period_start * 1000).toISOString(),
+          current_period_end: new Date(subscription.current_period_end * 1000).toISOString(),
+        }, { onConflict: 'user_id' });
+        console.log('[WEBHOOK] checkout.session.completed userId:', userId, 'plan:', planKey, 'credits:', plan.credits);
+      }
+    }
+  } else if (event.type === 'invoice.paid') {
     const invoice = event.data.object;
+    if (!invoice.subscription) return res.json({ received: true });
     const subscription = await stripe.subscriptions.retrieve(invoice.subscription);
     const userId = subscription.metadata.userId;
+    const planKey = subscription.metadata.planKey || 'basico';
+    const plan = PLANES[planKey] || PLANES.basico;
     if (userId) {
       await supabase.from('user_credits').upsert({
         user_id: userId,
-        credits_remaining: 3,
+        credits_remaining: plan.credits,
         subscription_status: 'active',
-        subscription_id: subscription.id,
+        plan: planKey,
+        stripe_subscription_id: subscription.id,
+        current_period_start: new Date(subscription.current_period_start * 1000).toISOString(),
         current_period_end: new Date(subscription.current_period_end * 1000).toISOString(),
       }, { onConflict: 'user_id' });
+      console.log('[WEBHOOK] invoice.paid userId:', userId, 'plan:', planKey, 'credits renovados:', plan.credits);
+    }
+  } else if (event.type === 'customer.subscription.updated') {
+    const subscription = event.data.object;
+    const userId = subscription.metadata.userId;
+    const planKey = subscription.metadata.planKey || 'basico';
+    if (userId) {
+      await supabase.from('user_credits')
+        .update({
+          subscription_status: subscription.status === 'active' ? 'active' : subscription.status,
+          plan: planKey,
+          current_period_start: new Date(subscription.current_period_start * 1000).toISOString(),
+          current_period_end: new Date(subscription.current_period_end * 1000).toISOString(),
+        })
+        .eq('user_id', userId);
+      console.log('[WEBHOOK] subscription.updated userId:', userId, 'status:', subscription.status);
     }
   } else if (event.type === 'customer.subscription.deleted') {
     const subscription = event.data.object;
     const userId = subscription.metadata.userId;
     if (userId) {
       await supabase.from('user_credits')
-        .update({ subscription_status: 'cancelled' })
+        .update({ subscription_status: 'cancelled', credits_remaining: 0 })
         .eq('user_id', userId);
+      console.log('[WEBHOOK] subscription.deleted userId:', userId);
     }
   }
 
@@ -126,16 +174,21 @@ app.get('/health', (req, res) => {
 
 app.post('/create-subscription', async (req, res) => {
   try {
-    const { userId, userEmail } = req.body;
+    const { userId, userEmail, planKey } = req.body;
+    const plan = PLANES[planKey] || PLANES.basico;
+    if (!plan.priceId) {
+      return res.status(400).json({ error: `Price ID no configurado para plan: ${planKey || 'basico'}` });
+    }
     const session = await stripe.checkout.sessions.create({
       mode: 'subscription',
       payment_method_types: ['card'],
       customer_email: userEmail,
-      line_items: [{ price: STRIPE_PRICE_ID, quantity: 1 }],
-      success_url: `${FRONTEND_URL}?subscribed=true`,
+      line_items: [{ price: plan.priceId, quantity: 1 }],
+      success_url: `${FRONTEND_URL}?subscribed=true&plan=${planKey || 'basico'}`,
       cancel_url: `${FRONTEND_URL}?cancelled=true`,
-      subscription_data: { metadata: { userId } },
+      subscription_data: { metadata: { userId, planKey: planKey || 'basico' } },
     });
+    console.log('[CREATE-SUBSCRIPTION] userId:', userId, 'plan:', planKey, 'priceId:', plan.priceId);
     res.json({ url: session.url });
   } catch (error) {
     console.error('[CREATE-SUBSCRIPTION] Error:', error);
@@ -148,20 +201,21 @@ app.get('/credits/:userId', async (req, res) => {
     const { userId } = req.params;
     const { data } = await supabase
       .from('user_credits')
-      .select('credits_remaining, subscription_status, current_period_end')
+      .select('credits_remaining, subscription_status, plan, current_period_end')
       .eq('user_id', userId)
       .single();
     if (!data) {
-      return res.json({ credits: 0, subscriptionStatus: 'inactive' });
+      return res.json({ credits: 0, subscriptionStatus: 'inactive', plan: null });
     }
     res.json({
       credits: data.credits_remaining,
       subscriptionStatus: data.subscription_status,
+      plan: data.plan || null,
       currentPeriodEnd: data.current_period_end,
     });
   } catch (error) {
     console.error('[CREDITS] Error:', error);
-    res.json({ credits: 0, subscriptionStatus: 'inactive' });
+    res.json({ credits: 0, subscriptionStatus: 'inactive', plan: null });
   }
 });
 
@@ -192,16 +246,21 @@ app.post('/api/dreams/generate', async (req, res) => {
       return res.status(400).json({ error: 'Faltan parametros' });
     }
 
+    let planKey = 'basico';
     if (userId) {
       const { data: creditData } = await supabase
         .from('user_credits')
-        .select('credits_remaining')
+        .select('credits_remaining, plan')
         .eq('user_id', userId)
         .single();
       if (!creditData || creditData.credits_remaining <= 0) {
         return res.status(402).json({ error: 'Sin créditos disponibles' });
       }
+      planKey = creditData.plan || 'basico';
     }
+
+    const plan = PLANES[planKey] || PLANES.basico;
+    console.log('[GENERATE] Plan:', planKey, '| duration:', plan.duration, '| resolution:', plan.resolution);
 
     const enrichedText = await enrichPromptWithClaude(text);
     const promptToUse = enrichedText || text;
@@ -212,8 +271,8 @@ app.post('/api/dreams/generate', async (req, res) => {
 
     const higgsBody = {
       prompt: fullPrompt,
-      duration: 4,
-      resolution: '720p',
+      duration: plan.duration,
+      resolution: plan.resolution,
       bitrate_mode: 'high',
       output_format: 'mp4',
       generate_audio: true,
