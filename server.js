@@ -295,7 +295,7 @@ app.post('/api/user/upload-face', async (req, res) => {
 
 app.post('/api/dreams/generate', async (req, res) => {
   try {
-    const { text, style, userId, incluirCara, elementId, isPublic } = req.body;
+    const { text, style, userId, incluirCara, elementId, isPublic, videoFormat } = req.body;
     if (!text) {
       return res.status(400).json({ error: 'Faltan parametros' });
     }
@@ -323,14 +323,17 @@ app.post('/api/dreams/generate', async (req, res) => {
 
     const usarCara = !!(incluirCara && elementId);
 
+    const aspectRatio = videoFormat === 'square' ? '1:1' : '9:16';
     const higgsBody = {
       prompt: fullPrompt,
       duration: plan.duration,
       resolution: plan.resolution,
+      aspect_ratio: aspectRatio,
       bitrate_mode: 'high',
       output_format: 'mp4',
       generate_audio: true,
     };
+    console.log('[GENERATE] Formato:', videoFormat, '| aspect_ratio:', aspectRatio);
 
     if (usarCara) {
       higgsBody.image_url = elementId;
