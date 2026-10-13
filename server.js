@@ -37,6 +37,7 @@ const STRIPE_WEBHOOK_SECRET = (process.env.STRIPE_WEBHOOK_SECRET || '').trim();
 const ADMIN_SECRET_KEY = (process.env.ADMIN_SECRET_KEY || '').trim();
 
 const PLANES = {
+  free:    { priceId: null, credits: 1, duration: 4,  resolution: '480p', label: 'Gratis'   },
   basico:  { priceId: (process.env.STRIPE_PRICE_BASICO  || '').trim(), credits: 3, duration: 8,  resolution: '720p', label: 'Básico'   },
   pro:     { priceId: (process.env.STRIPE_PRICE_PRO     || '').trim(), credits: 5, duration: 15, resolution: '720p', label: 'Pro'       },
   premium: { priceId: (process.env.STRIPE_PRICE_PREMIUM || '').trim(), credits: 5, duration: 30, resolution: '720p', label: 'Premium'   },
@@ -300,20 +301,31 @@ app.post('/api/dreams/generate', async (req, res) => {
       return res.status(400).json({ error: 'Faltan parametros' });
     }
 
-    let planKey = 'basico';
+    let planKey = 'free';
     if (userId) {
-      const { data: creditData } = await supabase
+      let { data: creditData } = await supabase
         .from('user_credits')
         .select('credits_remaining, plan')
         .eq('user_id', userId)
         .single();
+
+      // Auto-crear registro free para usuarios nuevos
+      if (!creditData) {
+        await supabase.from('user_credits').insert({
+          user_id: userId,
+          credits_remaining: 1,
+          plan: 'free',
+        });
+        creditData = { credits_remaining: 1, plan: 'free' };
+      }
+
       if (!creditData || creditData.credits_remaining <= 0) {
         return res.status(402).json({ error: 'Sin créditos disponibles' });
       }
-      planKey = creditData.plan || 'basico';
+      planKey = creditData.plan || 'free';
     }
 
-    const plan = PLANES[planKey] || PLANES.basico;
+    const plan = PLANES[planKey] || PLANES.free;
     console.log('[GENERATE] Plan:', planKey, '| duration:', plan.duration, '| resolution:', plan.resolution);
 
     const enrichedText = await enrichPromptWithClaude(text);
