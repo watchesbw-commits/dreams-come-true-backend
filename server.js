@@ -260,7 +260,14 @@ app.get('/credits/:userId', async (req, res) => {
       .eq('user_id', userId)
       .single();
     if (!data) {
-      return res.json({ credits: 0, subscriptionStatus: 'inactive', plan: null });
+      // Usuario nuevo — crear crédito gratis automáticamente
+      await supabase.from('user_credits').insert({
+        user_id: userId,
+        credits_remaining: 1,
+        plan: 'free',
+        subscription_status: 'inactive',
+      });
+      return res.json({ credits: 1, subscriptionStatus: 'inactive', plan: 'free' });
     }
     res.json({
       credits: data.credits_remaining,
