@@ -179,6 +179,95 @@ app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res)
   res.json({ received: true });
 });
 
+// ============ REVENUECAT (compras In-App de iOS) ============
+const REVENUECAT_WEBHOOK_SECRET = (process.env.REVENUECAT_WEBHOOK_SECRET || '').trim();
+
+const PLAN_BY_APPLE_PRODUCT = {
+  'app.oniradreams.basico.mensual':  'basico',
+  'app.oniradreams.pro.mensual':     'pro',
+  'app.oniradreams.premium.mensual': 'premium',
+};
+const PLAN_RANK = { free: 0, basico: 1, pro: 2, premium: 3 };
+
+app.post('/revenuecat-webhook', express.json(), async (req, res) => {
+  if (!REVENUECAT_WEBHOOK_SECRET || req.headers.authorization !== REVENUECAT_WEBHOOK_SECRET) {
+    console.error('[RC-WEBHOOK] Authorization invalida');
+    return res.status(401).json({ error: 'unauthorized' });
+  }
+
+  const event = req.body?.event;
+  if (!event?.id) return res.status(400).json({ error: 'missing event' });
+
+  // Idempotencia: reutiliza la tabla de eventos de Stripe con prefijo "rc_"
+  const eventKey = `rc_${event.id}`;
+  try {
+    if (await isEventAlreadyProcessed(eventKey)) {
+      console.log('[RC-WEBHOOK] Evento duplicado ignorado:', event.id);
+      return res.json({ received: true });
+    }
+  } catch (e) {
+    console.error('[RC-WEBHOOK] Error verificando idempotencia:', e.message);
+  }
+
+  const userId = event.app_user_id; // = id de Supabase (Purchases.configure con appUserID)
+  const productId = event.new_product_id || event.product_id;
+  const planKey = PLAN_BY_APPLE_PRODUCT[productId];
+  const periodFields = {
+    ...(event.purchased_at_ms && { current_period_start: new Date(event.purchased_at_ms).toISOString() }),
+    ...(event.expiration_at_ms && { current_period_end: new Date(event.expiration_at_ms).toISOString() }),
+  };
+
+  try {
+    if (userId?.startsWith('$RCAnonymousID')) {
+      console.warn('[RC-WEBHOOK] Compra de usuario anonimo, ignorada:', event.type, userId);
+
+    } else if (['INITIAL_PURCHASE', 'RENEWAL', 'UNCANCELLATION'].includes(event.type) && planKey) {
+      const plan = PLANES[planKey];
+      await supabase.from('user_credits').upsert({
+        user_id: userId,
+        credits_remaining: plan.credits,
+        subscription_status: 'active',
+        plan: planKey,
+        ...periodFields,
+      }, { onConflict: 'user_id' });
+      console.log('[RC-WEBHOOK]', event.type, 'userId:', userId, 'plan:', planKey, 'credits:', plan.credits);
+
+    } else if (event.type === 'PRODUCT_CHANGE' && planKey) {
+      // En Apple las mejoras de plan aplican de inmediato; las bajadas llegan como RENEWAL al siguiente periodo.
+      const { data: current } = await supabase.from('user_credits')
+        .select('plan').eq('user_id', userId).maybeSingle();
+      if ((PLAN_RANK[planKey] || 0) > (PLAN_RANK[current?.plan] || 0)) {
+        const plan = PLANES[planKey];
+        await supabase.from('user_credits').upsert({
+          user_id: userId,
+          credits_remaining: plan.credits,
+          subscription_status: 'active',
+          plan: planKey,
+          ...periodFields,
+        }, { onConflict: 'user_id' });
+        console.log('[RC-WEBHOOK] PRODUCT_CHANGE (mejora) userId:', userId, 'plan:', planKey);
+      }
+
+    } else if (event.type === 'EXPIRATION') {
+      await supabase.from('user_credits')
+        .update({ subscription_status: 'cancelled', credits_remaining: 0 })
+        .eq('user_id', userId);
+      console.log('[RC-WEBHOOK] EXPIRATION userId:', userId);
+
+    } else {
+      // CANCELLATION = apago la renovacion; sigue activo hasta EXPIRATION.
+      console.log('[RC-WEBHOOK] Evento no manejado (ignorado):', event.type);
+    }
+
+    await markEventProcessed(eventKey, `revenuecat:${event.type}`);
+  } catch (err) {
+    console.error('[RC-WEBHOOK] Error procesando evento', event.type, ':', err.message);
+    return res.status(500).json({ error: 'Error interno procesando webhook' }); // RevenueCat reintenta
+  }
+
+  res.json({ received: true });
+});
+
 app.use(express.json({ limit: '10mb' }));
 app.use(express.static('public'));
 
