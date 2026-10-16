@@ -390,11 +390,31 @@ app.post('/api/user/upload-face', async (req, res) => {
   }
 });
 
+const PALABRAS_PROHIBIDAS = [
+  'pornography','pornografía','porno','xxx','nude','desnud','naked','sex scene','escena sexual',
+  'masturbat','orgasm','orgasmo','penis','pene','vagina','genitales','genitals','erection','ereccion',
+  'rape','violacion','violación','child porn','pedofil','lolita','incest','incesto',
+  'behead','decapitar','decapitation','torture','tortura','gore','mutilat',
+  'terrorist attack','ataque terrorista','bomb explosion','suicide bomb',
+];
+
+function tieneContenidoProhibido(texto) {
+  const lower = texto.toLowerCase();
+  return PALABRAS_PROHIBIDAS.some(p => lower.includes(p));
+}
+
 app.post('/api/dreams/generate', async (req, res) => {
   try {
     const { text, style, userId, incluirCara, elementId, isPublic, videoFormat } = req.body;
     if (!text) {
       return res.status(400).json({ error: 'Faltan parametros' });
+    }
+
+    if (tieneContenidoProhibido(text)) {
+      return res.status(400).json({
+        error: 'contenido_prohibido',
+        message: 'Tu sueño contiene contenido que no está permitido. Por favor descríbelo de otra forma.',
+      });
     }
 
     let planKey = 'free';
