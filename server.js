@@ -495,6 +495,7 @@ app.post('/api/dreams/generate', async (req, res) => {
 
     operations[jobId] = jobId;
     operationUsers[jobId] = { userId, text, style, isPublic: !!isPublic, statusUrl: higgsData.status_url };
+    await saveJob(jobId, operationUsers[jobId]);
     console.log('[GENERATE] Job Higgsfield creado:', jobId);
 
     res.json({
@@ -510,97 +511,188 @@ app.post('/api/dreams/generate', async (req, res) => {
   }
 });
 
+// ============ TRABAJOS DE VIDEO ============
+// Cada generación queda en la tabla dream_jobs. Así el sueño se guarda aunque el usuario cierre la app
+// o el servidor se reinicie: un proceso de fondo termina lo que la app ya no esté esperando.
+const JOB_SWEEP_MS = 30 * 1000;
+const JOB_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const JOB_FINALIZING_STALE_MS = 10 * 60 * 1000;
+const finalizingJobs = new Set();
+
+async function saveJob(jobId, job) {
+  const { error } = await supabase.from('dream_jobs').insert({
+    job_id: jobId,
+    user_id: job.userId || null,
+    text: job.text,
+    style: job.style || null,
+    is_public: job.isPublic,
+    status_url: job.statusUrl || null,
+  });
+  if (error) console.error('[JOBS] No se pudo registrar el trabajo:', jobId, error.message);
+}
+
+async function getJob(jobId) {
+  const { data, error } = await supabase.from('dream_jobs').select('*').eq('job_id', jobId).maybeSingle();
+  if (error) console.error('[JOBS] Error leyendo trabajo:', jobId, error.message);
+  if (data) {
+    return {
+      userId: data.user_id, text: data.text, style: data.style, isPublic: data.is_public,
+      statusUrl: data.status_url, status: data.status, videoUrl: data.video_url, inDb: true,
+    };
+  }
+  return operationUsers[jobId] ? { ...operationUsers[jobId], status: 'pending', inDb: false } : null;
+}
+
+async function setJobStatus(jobId, fields) {
+  const { error } = await supabase.from('dream_jobs')
+    .update({ ...fields, updated_at: new Date().toISOString() })
+    .eq('job_id', jobId);
+  if (error) console.error('[JOBS] Error actualizando trabajo:', jobId, error.message);
+}
+
+// Solo quien logra pasar el trabajo de pending a finalizing guarda el video: evita sueños y cobros dobles.
+async function claimJob(jobId, job) {
+  if (finalizingJobs.has(jobId)) return false;
+  if (job.inDb) {
+    const { data, error } = await supabase.from('dream_jobs')
+      .update({ status: 'finalizing', updated_at: new Date().toISOString() })
+      .eq('job_id', jobId)
+      .eq('status', 'pending')
+      .select('job_id');
+    if (error) throw error;
+    if (!data.length) return false;
+  }
+  finalizingJobs.add(jobId);
+  return true;
+}
+
+async function finalizeJob(jobId, job, higgsVideoUrl) {
+  if (!(await claimJob(jobId, job))) return null;
+  try {
+    console.log('[JOBS] Video listo, descargando de Higgsfield:', jobId);
+    const videoResp = await fetch(higgsVideoUrl);
+    if (!videoResp.ok) throw new Error(`Descarga de Higgsfield: ${videoResp.status}`);
+    const videoBuffer = Buffer.from(await videoResp.arrayBuffer());
+
+    const fileName = `videos/${Date.now()}.mp4`;
+    await bucket.file(fileName).save(videoBuffer, { contentType: 'video/mp4' });
+    const publicUrl = `https://storage.googleapis.com/${GCS_BUCKET}/${fileName}`;
+    videoUris[jobId] = publicUrl;
+
+    if (job.userId) {
+      // El sueño se guarda antes de cobrar: si esto falla se reintenta sin descontar dos veces.
+      const { error: insertError } = await supabase.from('dreams').insert({
+        user_id: job.userId,
+        text: job.text,
+        style: job.style || null,
+        video_url: publicUrl,
+        is_public: job.isPublic,
+      });
+      if (insertError) throw insertError;
+
+      const { data: creditData } = await supabase
+        .from('user_credits')
+        .select('credits_remaining')
+        .eq('user_id', job.userId)
+        .single();
+      if (creditData && creditData.credits_remaining > 0) {
+        await supabase
+          .from('user_credits')
+          .update({ credits_remaining: creditData.credits_remaining - 1 })
+          .eq('user_id', job.userId);
+      }
+    }
+
+    if (job.inDb) await setJobStatus(jobId, { status: 'done', video_url: publicUrl });
+    delete operationUsers[jobId];
+    console.log('[JOBS] Sueno guardado:', jobId);
+    return publicUrl;
+  } catch (error) {
+    if (job.inDb) await setJobStatus(jobId, { status: 'pending' });
+    throw error;
+  } finally {
+    finalizingJobs.delete(jobId);
+  }
+}
+
+// Resultado: { done, videoUri } | { done: false } | { failed: true } | { missing: true }
+async function processJob(jobId) {
+  const job = await getJob(jobId);
+  if (!job) return { missing: true };
+  if (job.status === 'done') return { done: true, videoUri: job.videoUrl };
+  if (job.status === 'failed' || job.status === 'expired') return { failed: true };
+  if (job.status === 'finalizing') return { done: false };
+
+  const statusUrl = job.statusUrl || `https://api.higgsfield.ai/requests/${jobId}/status`;
+  const higgsResp = await fetch(statusUrl, {
+    headers: { 'Authorization': `Key ${HIGGSFIELD_API_KEY}`, 'Accept': 'application/json' },
+  });
+  if (!higgsResp.ok) throw new Error(`Estado de Higgsfield: ${higgsResp.status}`);
+
+  const higgsData = await higgsResp.json();
+  console.log('[JOBS]', jobId, '| status:', higgsData.status);
+
+  if (higgsData.status === 'failed' || higgsData.status === 'nsfw') {
+    console.error('[JOBS] Trabajo fallo:', JSON.stringify(higgsData));
+    if (job.inDb) await setJobStatus(jobId, { status: 'failed' });
+    return { failed: true };
+  }
+  if (higgsData.status !== 'completed') return { done: false };
+
+  const videoUrl = higgsData.video?.url;
+  if (!videoUrl) throw new Error('Trabajo completado sin video_url');
+
+  const publicUrl = await finalizeJob(jobId, job, videoUrl);
+  return publicUrl ? { done: true, videoUri: publicUrl } : { done: false };
+}
+
+let sweepRunning = false;
+async function sweepJobs() {
+  if (sweepRunning) return;
+  sweepRunning = true;
+  try {
+    const now = Date.now();
+    await supabase.from('dream_jobs')
+      .update({ status: 'pending', updated_at: new Date().toISOString() })
+      .eq('status', 'finalizing')
+      .lt('updated_at', new Date(now - JOB_FINALIZING_STALE_MS).toISOString());
+    await supabase.from('dream_jobs')
+      .update({ status: 'expired', updated_at: new Date().toISOString() })
+      .eq('status', 'pending')
+      .lt('created_at', new Date(now - JOB_MAX_AGE_MS).toISOString());
+
+    const { data, error } = await supabase.from('dream_jobs')
+      .select('job_id')
+      .eq('status', 'pending')
+      .order('created_at', { ascending: true })
+      .limit(20);
+    if (error) throw error;
+    for (const { job_id: jobId } of data || []) {
+      await processJob(jobId).catch(e => console.error('[JOBS] Error procesando', jobId, e.message));
+    }
+  } catch (error) {
+    console.error('[JOBS] Error en la revision de fondo:', error.message);
+  } finally {
+    sweepRunning = false;
+  }
+}
+setInterval(sweepJobs, JOB_SWEEP_MS);
+
 app.post('/api/dreams/status', async (req, res) => {
   try {
     const { operationName } = req.body;
     if (!operationName) {
       return res.status(400).json({ error: 'Falta operationName' });
     }
-
-    const jobId = operationName;
-    const meta = operationUsers[jobId];
-    const statusUrl = meta?.statusUrl || `https://api.higgsfield.ai/requests/${jobId}/status`;
-
-    const higgsResp = await fetch(statusUrl, {
-      headers: {
-        'Authorization': `Key ${HIGGSFIELD_API_KEY}`,
-        'Accept': 'application/json',
-      },
-    });
-
-    if (!higgsResp.ok) {
-      console.error('[STATUS] Error consultando Higgsfield:', higgsResp.status);
-      return res.status(502).json({ error: 'Error consultando estado del job' });
-    }
-
-    const higgsData = await higgsResp.json();
-    console.log('[STATUS]', jobId, '| status:', higgsData.status);
-
-    if (higgsData.status === 'failed' || higgsData.status === 'nsfw') {
-      console.error('[STATUS] Job fallo:', JSON.stringify(higgsData));
-      return res.status(500).json({ error: 'La generacion del video fallo' });
-    }
-
-    if (higgsData.status !== 'completed') {
-      return res.json({ done: false, message: 'Generando...' });
-    }
-
-    const videoUrl = higgsData.video?.url;
-    if (!videoUrl) {
-      console.error('[STATUS] Job completado pero no hay video_url:', JSON.stringify(higgsData));
-      return res.status(500).json({ error: 'Job completado pero no se encontro el video_url' });
-    }
-
-    console.log('[STATUS] Video listo, descargando de Higgsfield:', videoUrl);
-
-    const videoResp = await fetch(videoUrl);
-    if (!videoResp.ok) {
-      console.error('[STATUS] No se pudo descargar el video:', videoResp.status);
-      return res.status(502).json({ error: 'No se pudo descargar el video de Higgsfield' });
-    }
-    const videoBuffer = Buffer.from(await videoResp.arrayBuffer());
-
-    const fileName = `videos/${Date.now()}.mp4`;
-    const file = bucket.file(fileName);
-    await file.save(videoBuffer, { contentType: 'video/mp4' });
-
-    const publicUrl = `https://storage.googleapis.com/${GCS_BUCKET}/${fileName}`;
-    videoUris[operationName] = publicUrl;
-    console.log('[STATUS] Video subido a GCS:', publicUrl);
-
-    const userId = meta?.userId;
-    if (userId) {
-      const { data: creditData } = await supabase
-        .from('user_credits')
-        .select('credits_remaining')
-        .eq('user_id', userId)
-        .single();
-      if (creditData && creditData.credits_remaining > 0) {
-        await supabase
-          .from('user_credits')
-          .update({ credits_remaining: creditData.credits_remaining - 1 })
-          .eq('user_id', userId);
-        console.log('[STATUS] Credito descontado para userId:', userId);
-      }
-
-      const { error: insertError } = await supabase.from('dreams').insert({
-        user_id: userId,
-        text: meta.text,
-        style: meta.style || null,
-        video_url: publicUrl,
-        is_public: meta.isPublic,
-      });
-      if (insertError) {
-        console.error('[STATUS] Error guardando dream en Supabase:', insertError);
-      } else {
-        console.log('[STATUS] Dream guardado en Supabase, is_public:', meta.isPublic);
-      }
-    }
-
-    res.json({ done: true, videoUri: publicUrl });
+    const result = await processJob(operationName);
+    if (result.missing) return res.status(404).json({ error: 'Trabajo no encontrado' });
+    if (result.failed) return res.status(500).json({ error: 'La generacion del video fallo' });
+    if (result.done) return res.json({ done: true, videoUri: result.videoUri });
+    res.json({ done: false, message: 'Generando...' });
   } catch (error) {
-    console.error('[STATUS] Error:', error);
-    res.status(500).json({ error: error.message });
+    // Error temporal: el trabajo sigue pendiente y se vuelve a intentar.
+    console.error('[STATUS] Error:', error.message);
+    res.json({ done: false, message: 'Generando...' });
   }
 });
 
