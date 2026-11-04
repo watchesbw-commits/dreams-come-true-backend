@@ -639,6 +639,35 @@ app.get('/api/dreams/user/:userId', async (req, res) => {
   }
 });
 
+// Usuario dueño del token de Supabase que manda la app, o null si no hay sesión válida.
+async function userFromRequest(req) {
+  const header = req.headers.authorization || '';
+  if (!header.startsWith('Bearer ')) return null;
+  const { data, error } = await supabase.auth.getUser(header.slice(7));
+  return error ? null : data.user;
+}
+
+// Nombre público en el Universo: nombre y la inicial del apellido. Nunca el correo.
+const authorNames = new Map();
+const AUTHOR_NAME_TTL_MS = 10 * 60 * 1000;
+
+async function authorName(userId) {
+  const cached = authorNames.get(userId);
+  if (cached && cached.expires > Date.now()) return cached.name;
+  let name = null;
+  try {
+    const { data } = await supabase.auth.admin.getUserById(userId);
+    const meta = data?.user?.user_metadata || {};
+    const [first, last] = String(meta.full_name || meta.name || '').trim().split(/\s+/);
+    if (first) name = last ? `${first} ${last[0].toUpperCase()}.` : first;
+  } catch (error) {
+    console.error('[COMMUNITY] Error leyendo autor:', error.message);
+    return null;
+  }
+  authorNames.set(userId, { name, expires: Date.now() + AUTHOR_NAME_TTL_MS });
+  return name;
+}
+
 app.get('/api/dreams/community', async (req, res) => {
   try {
     const limit = Math.min(parseInt(req.query.limit, 10) || 20, 100);
@@ -656,11 +685,97 @@ app.get('/api/dreams/community', async (req, res) => {
       return res.status(500).json({ error: error.message });
     }
 
-    res.json({ dreams: data, total: count, limit, offset });
+    const dreams = data || [];
+    const viewer = await userFromRequest(req);
+    const names = await Promise.all(dreams.map(d => authorName(d.user_id)));
+
+    // Si la tabla de likes aún no existe, el Universo sigue funcionando sin el botón.
+    let likes = null;
+    if (dreams.length) {
+      const { data: likeRows, error: likesError } = await supabase
+        .from('dream_likes')
+        .select('dream_id, user_id')
+        .in('dream_id', dreams.map(d => d.id));
+      if (likesError) console.error('[COMMUNITY] Error consultando likes:', likesError.message);
+      else likes = likeRows || [];
+    }
+
+    res.json({
+      dreams: dreams.map(({ user_id, ...dream }, i) => ({
+        ...dream,
+        author_name: names[i],
+        ...(likes && {
+          like_count: likes.filter(l => l.dream_id === dream.id).length,
+          liked_by_me: !!viewer && likes.some(l => l.dream_id === dream.id && l.user_id === viewer.id),
+        }),
+      })),
+      total: count,
+      limit,
+      offset,
+    });
   } catch (error) {
     console.error('[COMMUNITY] Error:', error);
     res.status(500).json({ error: error.message });
   }
+});
+
+// Da o quita el like del usuario que inició sesión.
+app.post('/api/dreams/:id/like', async (req, res) => {
+  try {
+    const viewer = await userFromRequest(req);
+    if (!viewer) return res.status(401).json({ error: 'Inicia sesion para dar like' });
+
+    const dreamId = req.params.id;
+    const { data: dream } = await supabase
+      .from('dreams')
+      .select('id')
+      .eq('id', dreamId)
+      .eq('is_public', true)
+      .maybeSingle();
+    if (!dream) return res.status(404).json({ error: 'Sueno no encontrado' });
+
+    const { data: existing, error: readError } = await supabase
+      .from('dream_likes')
+      .select('dream_id')
+      .eq('dream_id', dreamId)
+      .eq('user_id', viewer.id)
+      .maybeSingle();
+    if (readError) throw readError;
+
+    const { error: writeError } = existing
+      ? await supabase.from('dream_likes').delete().eq('dream_id', dreamId).eq('user_id', viewer.id)
+      : await supabase.from('dream_likes').upsert({ dream_id: dreamId, user_id: viewer.id });
+    if (writeError) throw writeError;
+
+    const { count, error: countError } = await supabase
+      .from('dream_likes')
+      .select('dream_id', { count: 'exact', head: true })
+      .eq('dream_id', dreamId);
+    if (countError) throw countError;
+
+    res.json({ liked: !existing, like_count: count || 0 });
+  } catch (error) {
+    console.error('[LIKE] Error:', error);
+    res.status(500).json({ error: 'No se pudo guardar el like' });
+  }
+});
+
+// Entrega el video como descarga: el bucket no permite que la app lo lea directamente.
+app.get('/api/dreams/download', async (req, res) => {
+  const path = String(req.query.path || '');
+  if (!/^videos\/\d+\.mp4$/.test(path)) {
+    return res.status(400).json({ error: 'Video invalido' });
+  }
+  res.setHeader('Content-Type', 'video/mp4');
+  res.setHeader('Content-Disposition', 'attachment; filename="onira-sueno.mp4"');
+  bucket.file(path).createReadStream()
+    .on('error', (error) => {
+      console.error('[DOWNLOAD] Error:', error.message);
+      if (res.headersSent) return res.destroy();
+      res.removeHeader('Content-Disposition');
+      res.status(404).json({ error: 'Video no encontrado' });
+    })
+    .pipe(res);
 });
 
 app.post('/api/users', (req, res) => {
