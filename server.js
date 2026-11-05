@@ -4,6 +4,7 @@ import { Storage } from '@google-cloud/storage';
 import Stripe from 'stripe';
 import { createClient } from '@supabase/supabase-js';
 import { WebSocket } from 'ws';
+import { randomUUID } from 'node:crypto';
 globalThis.WebSocket = WebSocket;
 
 const stripe = new Stripe((process.env.STRIPE_SECRET_KEY || '').trim());
@@ -372,17 +373,19 @@ app.get('/credits/:userId', async (req, res) => {
 
 app.post('/api/user/upload-face', async (req, res) => {
   try {
-    const { userId, imageBase64 } = req.body;
-    if (!userId || !imageBase64) {
+    const viewer = await userFromRequest(req);
+    if (!viewer) return res.status(401).json({ error: 'Inicia sesion para subir tu foto' });
+    const { imageBase64 } = req.body;
+    if (!imageBase64) {
       return res.status(400).json({ error: 'Faltan parámetros' });
     }
     const base64Data = imageBase64.replace(/^data:image\/\w+;base64,/, '');
     const imageBuffer = Buffer.from(base64Data, 'base64');
-    const fileName = `faces/${userId}.jpg`;
+    const fileName = `faces/${randomUUID()}.jpg`;
     const file = bucket.file(fileName);
     await file.save(imageBuffer, { contentType: 'image/jpeg' });
     const publicUrl = `https://storage.googleapis.com/${GCS_BUCKET}/${fileName}`;
-    console.log('[UPLOAD-FACE] Cara subida para userId:', userId);
+    console.log('[UPLOAD-FACE] Cara subida para userId:', viewer.id);
     res.json({ elementId: publicUrl });
   } catch (error) {
     console.error('[UPLOAD-FACE] Error:', error);
@@ -405,7 +408,10 @@ function tieneContenidoProhibido(texto) {
 
 app.post('/api/dreams/generate', async (req, res) => {
   try {
-    const { text, style, userId, incluirCara, elementId, isPublic, videoFormat } = req.body;
+    const { text, style, incluirCara, elementId, isPublic, videoFormat } = req.body;
+    const viewer = await userFromRequest(req);
+    if (!viewer) return res.status(401).json({ error: 'Inicia sesion para generar tu sueno' });
+    const userId = viewer.id;
     if (!text) {
       return res.status(400).json({ error: 'Faltan parametros' });
     }
@@ -709,6 +715,8 @@ app.get('/api/dreams/video', (req, res) => {
 app.get('/api/dreams/user/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
+    const viewer = await userFromRequest(req);
+    if (!viewer || viewer.id !== userId) return res.status(401).json({ error: 'No autorizado' });
     const limit = Math.min(parseInt(req.query.limit, 10) || 10, 50);
 
     const { data, error } = await supabase
@@ -764,11 +772,22 @@ app.get('/api/dreams/community', async (req, res) => {
   try {
     const limit = Math.min(parseInt(req.query.limit, 10) || 20, 100);
     const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+    const viewer = await userFromRequest(req);
 
-    const { data, error, count } = await supabase
+    let query = supabase
       .from('dreams')
       .select('id, user_id, text, style, video_url, created_at', { count: 'exact' })
-      .eq('is_public', true)
+      .eq('is_public', true);
+    if (viewer) {
+      const { data: blocks, error: blocksError } = await supabase
+        .from('user_blocks')
+        .select('blocked_id')
+        .eq('blocker_id', viewer.id);
+      if (blocksError) console.error('[COMMUNITY] Error consultando bloqueos:', blocksError.message);
+      const blockedIds = (blocks || []).map(b => b.blocked_id);
+      if (blockedIds.length) query = query.not('user_id', 'in', `(${blockedIds.join(',')})`);
+    }
+    const { data, error, count } = await query
       .order('created_at', { ascending: false })
       .range(offset, offset + limit - 1);
 
@@ -778,7 +797,6 @@ app.get('/api/dreams/community', async (req, res) => {
     }
 
     const dreams = data || [];
-    const viewer = await userFromRequest(req);
     const names = await Promise.all(dreams.map(d => authorName(d.user_id)));
 
     // Si la tabla de likes aún no existe, el Universo sigue funcionando sin el botón.
@@ -796,6 +814,7 @@ app.get('/api/dreams/community', async (req, res) => {
       dreams: dreams.map(({ user_id, ...dream }, i) => ({
         ...dream,
         author_name: names[i],
+        is_mine: !!viewer && viewer.id === user_id,
         ...(likes && {
           like_count: likes.filter(l => l.dream_id === dream.id).length,
           liked_by_me: !!viewer && likes.some(l => l.dream_id === dream.id && l.user_id === viewer.id),
@@ -851,6 +870,72 @@ app.post('/api/dreams/:id/like', async (req, res) => {
     res.status(500).json({ error: 'No se pudo guardar el like' });
   }
 });
+
+// Oculta todo lo que publique el autor de este sueño. Su identidad no se expone a quien bloquea.
+app.post('/api/dreams/:id/block-author', async (req, res) => {
+  try {
+    const viewer = await userFromRequest(req);
+    if (!viewer) return res.status(401).json({ error: 'Inicia sesion para bloquear' });
+    const { data: dream } = await supabase
+      .from('dreams')
+      .select('user_id')
+      .eq('id', req.params.id)
+      .eq('is_public', true)
+      .maybeSingle();
+    if (!dream) return res.status(404).json({ error: 'Sueno no encontrado' });
+    if (dream.user_id === viewer.id) return res.status(400).json({ error: 'No puedes bloquearte' });
+    const { error } = await supabase
+      .from('user_blocks')
+      .upsert({ blocker_id: viewer.id, blocked_id: dream.user_id });
+    if (error) throw error;
+    res.json({ blocked: true });
+  } catch (error) {
+    console.error('[BLOCK] Error:', error);
+    res.status(500).json({ error: 'No se pudo bloquear' });
+  }
+});
+
+// El dueño borra su sueño: desaparece del Diario y del Universo, y se borra el video.
+app.delete('/api/dreams/:id', async (req, res) => {
+  try {
+    const viewer = await userFromRequest(req);
+    if (!viewer) return res.status(401).json({ error: 'Inicia sesion para eliminar' });
+    const { data: dream } = await supabase
+      .from('dreams')
+      .select('id, video_url')
+      .eq('id', req.params.id)
+      .eq('user_id', viewer.id)
+      .maybeSingle();
+    if (!dream) return res.status(404).json({ error: 'Sueno no encontrado' });
+    const { error } = await supabase.from('dreams').delete().eq('id', dream.id);
+    if (error) throw error;
+
+    const path = (dream.video_url || '').split(`/${GCS_BUCKET}/`)[1];
+    if (path && /^videos\/\d+\.mp4$/.test(path)) {
+      await bucket.file(path).delete({ ignoreNotFound: true })
+        .catch(e => console.error('[DELETE] No se pudo borrar el video:', e.message));
+    }
+    res.json({ deleted: true });
+  } catch (error) {
+    console.error('[DELETE] Error:', error);
+    res.status(500).json({ error: 'No se pudo eliminar' });
+  }
+});
+
+// Las fotos de rostro solo se conservan 24 horas.
+const FACE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+async function purgeOldFaces() {
+  try {
+    const [files] = await bucket.getFiles({ prefix: 'faces/' });
+    const old = files.filter(f => Date.now() - new Date(f.metadata.timeCreated).getTime() > FACE_MAX_AGE_MS);
+    await Promise.all(old.map(f => f.delete({ ignoreNotFound: true })));
+    console.log(`[FACES] Revisadas ${files.length}, borradas ${old.length}`);
+  } catch (error) {
+    console.error('[FACES] Error borrando fotos antiguas:', error.message);
+  }
+}
+purgeOldFaces();
+setInterval(purgeOldFaces, 60 * 60 * 1000);
 
 // Entrega el video como descarga: el bucket no permite que la app lo lea directamente.
 app.get('/api/dreams/download', async (req, res) => {
